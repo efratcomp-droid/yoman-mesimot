@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <title>יומן משימות — עיצוב מאושר</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;700&family=Assistant:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --cream: #fbf7f3;
+        --card: #ffffff;
+        --ink: #2b1d2e;
+        --plum: #4a2c52;
+        --rose: #c15f86;
+        --lilac: #efe8f1;
+        --amber: #c98a2e;
+        --sage: #3f8f72;
+        --muted: #7c6e80;
+        --line: #e7dee8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--cream);
+        color: var(--ink);
+        font-family: 'Assistant', system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      .wrap {
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 18px 16px 132px;
+      }
+
+      .top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .brand {
+        font-family: 'Frank Ruhl Libre', serif;
+        font-weight: 700;
+        font-size: 27px;
+        line-height: 1.15;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      .datum {
+        font-size: 13.5px;
+        color: var(--muted);
+        margin: 3px 0 0;
+      }
+      .rule {
+        height: 2px;
+        width: 34px;
+        background: var(--rose);
+        border-radius: 2px;
+        margin: 9px 0 0;
+      }
+      .gear {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--lilac);
+        color: var(--plum);
+        font-size: 17px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        border: none;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .stat {
+        border-radius: 12px;
+        padding: 11px 8px;
+        text-align: center;
+      }
+      .stat b {
+        display: block;
+        font-family: 'Frank Ruhl Libre', serif;
+        font-size: 23px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .stat span {
+        font-size: 12.5px;
+        display: block;
+        margin-top: 1px;
+      }
+      .s1 {
+        background: #fbeaf0;
+      }
+      .s1 b {
+        color: #993556;
+      }
+      .s1 span {
+        color: #72243e;
+      }
+      .s2 {
+        background: var(--lilac);
+      }
+      .s2 b {
+        color: #4a2c52;
+      }
+      .s2 span {
+        color: #5b3a63;
+      }
+      .s3 {
+        background: #e3f1ea;
+      }
+      .s3 b {
+        color: #276a52;
+      }
+      .s3 span {
+        color: #1e5240;
+      }
+
+      .chips {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 14px;
+        overflow-x: auto;
+      }
+      .chip {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--muted);
+        padding: 6px 15px;
+        border-radius: 99px;
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .chip[aria-pressed='true'] {
+        background: var(--plum);
+        border-color: var(--plum);
+        color: #f6eff6;
+        font-weight: 500;
+      }
+
+      .task {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 11px 12px;
+        margin-bottom: 8px;
+      }
+      .task.is-done {
+        background: transparent;
+        border-style: dashed;
+      }
+      .box {
+        width: 23px;
+        height: 23px;
+        border-radius: 7px;
+        border: 1.8px solid var(--muted);
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        background: none;
+      }
+      .task.is-done .box {
+        background: var(--sage);
+        border-color: var(--sage);
+      }
+      .bar {
+        width: 4px;
+        align-self: stretch;
+        min-height: 30px;
+        border-radius: 99px;
+        flex: none;
+      }
+      .body {
+        flex: 1;
+        min-width: 0;
+      }
+      .title {
+        font-size: 15px;
+        margin: 0;
+        word-break: break-word;
+      }
+      .task.is-done .title {
+        text-decoration: line-through;
+        color: var(--muted);
+      }
+      .meta {
+        font-size: 12.5px;
+        color: var(--muted);
+        margin: 2px 0 0;
+      }
+      .meta .late {
+        color: #b3374d;
+        font-weight: 600;
+      }
+      .del {
+        color: #b0a3b4;
+        font-size: 17px;
+        flex: none;
+        background: none;
+        border: none;
+      }
+
+      .dock {
+        position: fixed;
+        inset-inline: 0;
+        bottom: 0;
+        background: rgba(251, 247, 243, 0.94);
+        backdrop-filter: blur(8px);
+        border-top: 1px solid var(--line);
+        padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+      }
+      .dock .inner {
+        max-width: 560px;
+        margin: 0 auto;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .field {
+        flex: 1;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        padding: 11px 13px;
+        min-width: 0;
+      }
+      .go {
+        width: 46px;
+        height: 44px;
+        border-radius: 11px;
+        background: var(--plum);
+        color: #fff;
+        font-size: 21px;
+        flex: none;
+        border: none;
+      }
+      .more {
+        color: var(--muted);
+        font-size: 13px;
+        padding: 8px 2px 0;
+        background: none;
+        border: none;
+        display: block;
+      }
+      .sync {
+        font-size: 12.5px;
+        color: var(--muted);
+        text-align: center;
+        padding-top: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <h1 class="brand">יומן משימות</h1>
+          <p class="datum">יום רביעי, כ״ד באב · 5 באוגוסט</p>
+          <div class="rule"></div>
+        </div>
+        <button class="gear" aria-label="הגדרות">⚙</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat s1"><b>3</b><span>להיום</span></div>
+        <div class="stat s2"><b>7</b><span>פתוחות</span></div>
+        <div class="stat s3"><b>12</b><span>הושלמו</span></div>
+      </div>
+
+      <div class="chips">
+        <button class="chip" aria-pressed="true">היום</button>
+        <button class="chip" aria-pressed="false">השבוע</button>
+        <button class="chip" aria-pressed="false">הכול</button>
+        <button class="chip" aria-pressed="false">בוצע</button>
+      </div>
+
+      <div class="task">
+        <button class="box" aria-label="סימון כבוצע"></button>
+        <span class="bar" style="background: #c15f86"></span>
+        <div class="body">
+          <p class="title">העברת דוח תזרים להנהלה</p>
+          <p class="meta">כספים · היום</p>
+        </div>
+        <button class="del" aria-label="מחיקה">✕</button>
+      </div>
+
+      <div class="task">
+        <button class="box" aria-label="סימון כבוצע"></button>
+        <span class="bar" style="background: #c98a2e"></span>
+        <div class="body">
+          <p class="title">התאמת שכר מול הנהלת חשבונות</p>
+          <p class="meta">כספים · מחר</p>
+        </div>
+        <button class="del" aria-label="מחיקה">✕</button>
+      </div>
+
+      <div class="task">
+        <button class="box" aria-label="סימון כבוצע"></button>
+        <span class="bar" style="background: #c15f86"></span>
+        <div class="body">
+          <p class="title">חידוש הזמנת ציוד</p>
+          <p class="meta">תפעול · <span class="late">באיחור</span></p>
+        </div>
+        <button class="del" aria-label="מחיקה">✕</button>
+      </div>
+
+      <div class="task">
+        <button class="box" aria-label="סימון כבוצע"></button>
+        <span class="bar" style="background: #a79baa"></span>
+        <div class="body">
+          <p class="title">סידור ארון התיקיות</p>
+          <p class="meta">אישי · ללא תאריך</p>
+        </div>
+        <button class="del" aria-label="מחיקה">✕</button>
+      </div>
+
+      <div class="task is-done">
+        <button class="box" aria-label="ביטול סימון">✓</button>
+        <span class="bar" style="background: #c9bfcb"></span>
+        <div class="body">
+          <p class="title">סגירת דוח תרומות יולי</p>
+          <p class="meta">כספים · הושלם</p>
+        </div>
+        <button class="del" aria-label="מחיקה">✕</button>
+      </div>
+
+      <p class="sync">נשמר · 14:32</p>
+    </div>
+
+    <div class="dock">
+      <div class="inner">
+        <div class="row">
+          <input class="field" placeholder="הוספת משימה חדשה…" />
+          <button class="go" aria-label="הוספה">+</button>
+        </div>
+        <button class="more">פרטים נוספים ▾</button>
+      </div>
+    </div>
+  </body>
+</html>

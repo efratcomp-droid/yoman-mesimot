@@ -21,16 +21,20 @@ export class ActionQueue<T> {
   private readonly store: KeyValueStore<QueueItem<T>>
   private readonly processor: Processor<T>
   private readonly onError?: ErrorHandler<T>
+  private readonly onChange?: () => void
   private draining = false
 
   constructor(options: {
     store: KeyValueStore<QueueItem<T>>
     processor: Processor<T>
     onError?: ErrorHandler<T>
+    /** Called whenever the queue's pending count may have changed (enqueued, delivered, or dropped). */
+    onChange?: () => void
   }) {
     this.store = options.store
     this.processor = options.processor
     this.onError = options.onError
+    this.onChange = options.onChange
 
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => void this.drain())
@@ -45,6 +49,7 @@ export class ActionQueue<T> {
       operation,
     }
     await this.store.put(item)
+    this.onChange?.()
   }
 
   /**
@@ -70,12 +75,14 @@ export class ActionQueue<T> {
         try {
           await this.processor(item.operation)
           await this.store.remove(item.id)
+          this.onChange?.()
         } catch (error) {
           if (error instanceof QueueNetworkError) {
             return
           }
           await this.store.remove(item.id)
           this.onError?.(item.operation, error)
+          this.onChange?.()
         }
       }
     } finally {

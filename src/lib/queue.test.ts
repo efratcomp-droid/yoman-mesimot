@@ -89,4 +89,37 @@ describe('ActionQueue', () => {
     window.dispatchEvent(new Event('online'))
     await vi.waitFor(() => expect(processor).toHaveBeenCalledWith('op-1'))
   })
+
+  it('reports onChange after enqueueing and after each item settles', async () => {
+    const store = new MemoryStore<QueueItem<string>>()
+    const failure = new Error('validation failed')
+    const processor = vi
+      .fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(undefined)
+    const onChange = vi.fn()
+    const queue = new ActionQueue<string>({ store, processor, onChange })
+
+    await queue.enqueue('op-1')
+    expect(onChange).toHaveBeenCalledTimes(1)
+
+    await queue.enqueue('op-2')
+    expect(onChange).toHaveBeenCalledTimes(2)
+
+    await queue.drain()
+    expect(onChange).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not call onChange when a network error stops draining', async () => {
+    const store = new MemoryStore<QueueItem<string>>()
+    const processor = vi.fn().mockRejectedValue(new QueueNetworkError())
+    const onChange = vi.fn()
+    const queue = new ActionQueue<string>({ store, processor, onChange })
+
+    await queue.enqueue('op-1')
+    onChange.mockClear()
+    await queue.drain()
+
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })
