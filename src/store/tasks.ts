@@ -64,9 +64,12 @@ export interface AddTaskInput {
   dueDate?: string | null
 }
 
+export type SyncStatus = 'synced' | 'syncing' | 'offline'
+
 interface TasksState {
   tasks: Task[]
   status: 'idle' | 'loading' | 'ready'
+  syncStatus: SyncStatus
   error: string | null
   load: () => Promise<void>
   addTask: (input: AddTaskInput) => Promise<void>
@@ -78,9 +81,19 @@ interface TasksState {
 }
 
 export const useTasksStore = create<TasksState>((set, get) => {
+  async function updateSyncStatus() {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      set({ syncStatus: 'offline' })
+      return
+    }
+    const pending = await queue.pending()
+    set({ syncStatus: pending.length > 0 ? 'syncing' : 'synced' })
+  }
+
   const queue = new ActionQueue<TaskOperation>({
     store: createIndexedDbStore<QueueItem<TaskOperation>>('tasks_queue'),
     processor: processTaskOperation,
+    onChange: () => void updateSyncStatus(),
     onError: (operation) => {
       if (operation.type === 'insert') {
         set((state) => ({
@@ -99,6 +112,11 @@ export const useTasksStore = create<TasksState>((set, get) => {
       }
     },
   })
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => void updateSyncStatus())
+    window.addEventListener('offline', () => void updateSyncStatus())
+  }
 
   function applyUpdate(id: string, changes: TaskChanges) {
     const previousTask = get().tasks.find((task) => task.id === id)
@@ -126,6 +144,10 @@ export const useTasksStore = create<TasksState>((set, get) => {
   return {
     tasks: [],
     status: 'idle',
+    syncStatus:
+      typeof navigator !== 'undefined' && navigator.onLine === false
+        ? 'offline'
+        : 'synced',
     error: null,
 
     load: async () => {
@@ -166,6 +188,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
 
       set({ tasks: merged })
       await putAll('tasks', merged)
+      void updateSyncStatus()
     },
 
     addTask: async (input) => {
