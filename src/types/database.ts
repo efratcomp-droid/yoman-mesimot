@@ -1,6 +1,6 @@
 export type Priority = 1 | 2 | 3
 
-export interface Category {
+export type Category = {
   id: string
   user_id: string
   name: string
@@ -8,7 +8,7 @@ export interface Category {
   position: number
 }
 
-export interface Task {
+export type Task = {
   id: string
   user_id: string
   title: string
@@ -23,7 +23,7 @@ export interface Task {
   deleted_at: string | null
 }
 
-export interface CategoryInsert {
+export type CategoryInsert = {
   id?: string
   user_id: string
   name: string
@@ -31,7 +31,7 @@ export interface CategoryInsert {
   position?: number
 }
 
-export interface CategoryUpdate {
+export type CategoryUpdate = {
   id?: string
   user_id?: string
   name?: string
@@ -39,7 +39,7 @@ export interface CategoryUpdate {
   position?: number
 }
 
-export interface TaskInsert {
+export type TaskInsert = {
   id?: string
   user_id: string
   title: string
@@ -54,7 +54,7 @@ export interface TaskInsert {
   deleted_at?: string | null
 }
 
-export interface TaskUpdate {
+export type TaskUpdate = {
   id?: string
   user_id?: string
   title?: string
@@ -69,19 +69,23 @@ export interface TaskUpdate {
   deleted_at?: string | null
 }
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
       categories: {
         Row: Category
         Insert: CategoryInsert
         Update: CategoryUpdate
+        Relationships: []
       }
       tasks: {
         Row: Task
         Insert: TaskInsert
         Update: TaskUpdate
+        Relationships: []
       }
     }
+    Views: Record<string, never>
+    Functions: Record<string, never>
   }
 }
