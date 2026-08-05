@@ -1,0 +1,133 @@
+# יומן משימות — מפרט פרויקט
+
+> קובץ זה הוא ההקשר הקבוע של הפרויקט. Claude Code קורא אותו אוטומטית בכל סשן.
+> אין לשנות אותו בלי בקשה מפורשת של בעלת הפרויקט.
+
+## המטרה
+
+אפליקציית ניהול משימות אישית בעברית, לשימוש יומיומי מאייפון וממחשב.
+משתמשת יחידה. הנתונים חייבים להיראות זהים בכל המכשירים תוך שניות ספורות.
+הפרויקט מפותח דרך Claude Code בענן, מול מאגר GitHub. אין סביבת פיתוח מקומית שאפשר להסתמך עליה — כל שינוי חייב לעבור בנייה תקינה ב-CI.
+
+עקרון מנחה: האפליקציה נפתחת עשרות פעמים ביום לפעולות של שתי שניות.
+מהירות פתיחה וקלות הוספת משימה גוברות על כל פיצ'ר אחר.
+
+## Stack
+
+| שכבה | טכנולוגיה |
+|---|---|
+| Frontend | React 18 + TypeScript + Vite |
+| State | Zustand (או React context — בלי Redux) |
+| מסד נתונים | Supabase (Postgres + Auth + Realtime + RLS) |
+| התקנה במכשיר | vite-plugin-pwa |
+| אירוח | GitHub Pages, מתפרסם ב-Actions בכל דחיפה ל-main |
+| בדיקות | Vitest + Testing Library |
+
+אין שרת ביניים. הדפדפן מדבר ישירות עם Supabase דרך `@supabase/supabase-js`.
+
+## מודל הנתונים
+
+```sql
+create table tasks (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  title        text not null check (length(trim(title)) > 0),
+  notes        text default '',
+  category_id  uuid references categories(id) on delete set null,
+  priority     smallint not null default 2 check (priority between 1 and 3), -- 1 דחוף, 2 רגיל, 3 נמוך
+  due_date     date,
+  done         boolean not null default false,
+  done_at      timestamptz,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  deleted_at   timestamptz  -- מחיקה רכה, נדרשת לסנכרון תקין
+);
+
+create table categories (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  name       text not null,
+  color      text not null default '#4A2C52',
+  position   smallint not null default 0
+);
+```
+
+קטגוריות ראשוניות שנוצרות בהרשמה: כספים, תפעול, הנהלה, אישי.
+
+## כללי אבטחה — לא ניתנים לפשרה
+
+1. RLS מופעל על כל טבלה, עם policy יחיד לכל פעולה: `user_id = auth.uid()`.
+2. בצד הלקוח משתמשים אך ורק ב-`anon key`. מפתח `service_role` לעולם לא נכנס לקוד הלקוח.
+3. המאגר ציבורי. שום סוד לא נכנס לקוד: לא מפתחות שרת, לא סיסמאות, לא כתובות מייל אישיות. `.env.local` נשאר ב-`.gitignore`, ומשתני הסביבה לבנייה מגיעים מ-GitHub Secrets.
+4. משתני סביבה: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`. שניהם ציבוריים מעצם הגדרתם — ההגנה על הנתונים נשענת כולה על RLS, ולכן אין להתפשר עליו.
+5. הרשמה עצמית מושבתת ב-Supabase לאחר יצירת המשתמשת הראשונה.
+
+## התנהגות הסנכרון
+
+1. **Offline-first.** בפתיחה מציגים מיד את המצב השמור מקומית (IndexedDB), ורק אחר כך מרעננים מהשרת.
+2. כל פעולה מתעדכנת מיד בממשק (optimistic update) ונכנסת לתור פעולות מקומי.
+3. התור מתרוקן ברקע. אם אין רשת — הוא נשמר וממתין, ומתנקז אוטומטית כשהחיבור חוזר.
+4. עדכונים ממכשירים אחרים נכנסים דרך Supabase Realtime על טבלת `tasks`.
+5. במקרה של התנגשות: הרשומה עם `updated_at` המאוחר יותר מנצחת.
+6. אינדיקטור מצב קבוע בתחתית המסך: מסונכרן / מסנכרן / אין חיבור.
+
+## עיצוב
+
+ה-UI כבר אושר. יש mockup ב-`reference/mockup.html` — יש להתאים אליו את המראה, לא להמציא עיצוב חדש.
+
+**צבעים**
+
+| שם | ערך | שימוש |
+|---|---|---|
+| cream | `#FBF7F3` | רקע העמוד |
+| card | `#FFFFFF` | כרטיסי משימה |
+| plum | `#4A2C52` | כותרות, כפתור ראשי |
+| rose | `#C15F86` | עדיפות דחוף, הדגשה |
+| amber | `#C98A2E` | עדיפות רגיל |
+| sage | `#3F8F72` | בוצע |
+| lilac | `#EFE8F1` | משטחים משניים |
+| muted | `#7C6E80` | טקסט משני |
+| line | `#E7DEE8` | מסגרות |
+
+**טיפוגרפיה**
+
+- כותרות ומספרים גדולים: `Frank Ruhl Libre` (700)
+- ממשק וגוף טקסט: `Assistant` (400 / 500 / 600)
+- גודל בסיס 16px. אין טקסט מתחת ל-12px.
+
+**כללי RTL**
+
+- `<html lang="he" dir="rtl">`
+- שימוש ב-logical properties בלבד: `margin-inline`, `padding-inline`, `inset-inline`. אין `margin-left` / `right`.
+- שדות שמכילים כתובות או מפתחות טכניים: `dir="ltr"` מקומי.
+- תאריכים ומספרים דרך `Intl` עם locale `he-IL`.
+- כיבוד `env(safe-area-inset-*)` — האפליקציה רצה במסך מלא באייפון.
+
+## מסכים
+
+1. **התחברות** — אימייל וסיסמה. שמירת session. אין הרשמה פתוחה.
+2. **מסך ראשי** — כותרת עם תאריך עברי ולועזי, שלושה מונים (להיום / פתוחות / הושלמו), סינון (היום / השבוע / הכול / בוצע), רשימת משימות, שורת הוספה מהירה קבועה בתחתית.
+3. **עריכת משימה** — פאנל תחתון: כותרת, הערות, קטגוריה, עדיפות, תאריך יעד, מחיקה.
+4. **הגדרות** — ניהול קטגוריות, יציאה מהחשבון, גרסה.
+
+**מיון ברירת מחדל:** משימות פתוחות תחילה, מהן המאוחרות באיחור בראש, אחר כך לפי תאריך יעד עולה, ובתוך אותו תאריך לפי עדיפות.
+
+**מצבים ריקים** מנוסחים כהזמנה לפעולה, לא כהתנצלות. לדוגמה: "אין משימות לתאריך של היום."
+
+## איכות — תנאי סף לכל שלב
+
+לפני שמדווחים שמשימה הושלמה:
+
+- `npm run build` עובר בלי שגיאות
+- `npm run lint` נקי
+- `npm test` עובר
+- אין `any` ב-TypeScript אלא אם מתועד בהערה מנומקת
+- כל טקסט בממשק בעברית. שמות משתנים, פונקציות והערות קוד באנגלית.
+- קומיט אחד לכל שלב, עם הודעה תיאורית בעברית
+
+## מה לא לעשות
+
+- לא להוסיף ספריות UI כבדות (Material UI, Chakra). CSS מודולרי או Tailwind בלבד.
+- לא להוסיף פיצ'רים שלא התבקשו.
+- לא לשנות את סכימת מסד הנתונים בלי לעדכן את הקובץ הזה.
+- לא להשתמש ב-`localStorage` לנתוני המשימות עצמם — רק IndexedDB לקאש ולתור הפעולות.
