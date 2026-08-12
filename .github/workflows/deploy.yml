@@ -33,6 +33,21 @@ jobs:
           npm run lint
           npm test
 
+      # Vite happily builds with an empty VITE_ value, which would publish an
+      # app that only fails once opened. Fail here instead, with a clear cause.
+      - name: ודאי שה-secrets מוגדרים
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=""
+          [ -z "$VITE_SUPABASE_URL" ] && missing="$missing VITE_SUPABASE_URL"
+          [ -z "$VITE_SUPABASE_ANON_KEY" ] && missing="$missing VITE_SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::חסרים secrets:$missing — יש להוסיף אותם ב-Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
       - name: בנייה
         run: npm run build
         env:
@@ -41,6 +56,10 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
       - uses: actions/configure-pages@v5
+        with:
+          # Provisions the Pages site on the first run instead of requiring it
+          # to be switched on by hand beforehand.
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
