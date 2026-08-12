@@ -53,11 +53,13 @@ npm run dev
 [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml), שמריץ בדיקות
 איכות, בונה, ומפרסם ל-GitHub Pages.
 
-לפני הפרסום הראשון צריך:
+לפני הפרסום הראשון צריך להוסיף ב-**Settings → Secrets and variables → Actions**
+את `VITE_SUPABASE_URL` ואת `VITE_SUPABASE_ANON_KEY`. בלעדיהם ה-workflow נעצר
+עם הודעה מפורשת, במקום לפרסם אפליקציה שנשברת רק כשפותחים אותה.
 
-1. **Settings → Pages → Source**: לבחור **GitHub Actions**
-2. **Settings → Secrets and variables → Actions**: להוסיף את `VITE_SUPABASE_URL`
-   ואת `VITE_SUPABASE_ANON_KEY`
+את GitHub Pages עצמו ה-workflow מפעיל לבד בהרצה הראשונה (`enablement: true`),
+ולכן אין צורך להגדיר אותו ידנית. אם ההרצה נכשלת בשלב הזה בכל זאת, אפשר לבחור
+ב-**Settings → Pages → Source** את **GitHub Actions**.
 
 האתר מתפרסם תחת `/yoman-mesimot/`, ולכן `base` ב-`vite.config.ts` מוגדר לנתיב
 הזה. אם שם המאגר משתנה — צריך לעדכן גם אותו.
