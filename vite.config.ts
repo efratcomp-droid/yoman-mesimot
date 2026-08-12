@@ -1,5 +1,7 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { copyFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -10,12 +12,35 @@ import { VitePWA } from 'vite-plugin-pwa'
  */
 const SUPABASE_URL_PATTERN = /^https:\/\/[a-z0-9-]+\.supabase\.(co|in)\//i
 
+/** GitHub Pages serves this repo from a project subpath, not the domain root. */
+const BASE = '/yoman-mesimot/'
+
+/**
+ * GitHub Pages has no server-side rewrite, so a deep link (or a hard refresh on
+ * one) 404s before the service worker exists to answer it. Pages serves
+ * 404.html for those, so shipping a copy of index.html under that name makes the
+ * very first load of any path boot the app. It is deliberately left out of the
+ * precache manifest: once the SW is installed, navigateFallback handles this.
+ */
+function spaFallback(): Plugin {
+  return {
+    name: 'spa-404-fallback',
+    apply: 'build',
+    closeBundle() {
+      const dist = resolve(__dirname, 'dist')
+      copyFileSync(resolve(dist, 'index.html'), resolve(dist, '404.html'))
+    },
+  }
+}
+
 export default defineConfig({
+  base: BASE,
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
+      // The icons live in public/ and are already covered by globPatterns
+      // below, so listing them in includeAssets would only duplicate entries.
       manifest: {
         name: 'יומן משימות',
         short_name: 'משימות',
@@ -40,9 +65,11 @@ export default defineConfig({
       workbox: {
         // Precached so the shell opens instantly and works with no network.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
+        globIgnores: ['404.html'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        navigateFallback: 'index.html',
+        // Must carry the base path: the SW is scoped to the project subpath.
+        navigateFallback: `${BASE}index.html`,
         navigateFallbackDenylist: [SUPABASE_URL_PATTERN],
         runtimeCaching: [
           {
@@ -67,6 +94,9 @@ export default defineConfig({
         ],
       },
     }),
+    // Last, so its closeBundle runs after the service worker is generated and
+    // 404.html stays out of the precache manifest.
+    spaFallback(),
   ],
   test: {
     environment: 'jsdom',
