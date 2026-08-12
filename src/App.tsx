@@ -1,11 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuthStore } from './store/authStore'
 import LoginScreen from './screens/LoginScreen'
 import MainScreen from './screens/MainScreen'
+import SettingsScreen from './screens/SettingsScreen'
 
 function App() {
   const status = useAuthStore((state) => state.status)
   const init = useAuthStore((state) => state.init)
+  const [showSettings, setShowSettings] = useState(false)
 
   useEffect(() => {
     init()
@@ -19,11 +21,15 @@ function App() {
     )
   }
 
-  if (status === 'authenticated') {
-    return <MainScreen />
+  if (status !== 'authenticated') {
+    return <LoginScreen />
   }
 
-  return <LoginScreen />
+  if (showSettings) {
+    return <SettingsScreen onBack={() => setShowSettings(false)} />
+  }
+
+  return <MainScreen onOpenSettings={() => setShowSettings(true)} />
 }
 
 export default App

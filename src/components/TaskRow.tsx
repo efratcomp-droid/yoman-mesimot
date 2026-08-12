@@ -17,9 +17,17 @@ interface TaskRowProps {
   categoryName: string
   onToggleDone: (id: string, done: boolean) => void
   onDelete: (id: string) => void
+  onEdit: (id: string) => void
 }
 
-function TaskRow({ task, today, categoryName, onToggleDone, onDelete }: TaskRowProps) {
+function TaskRow({
+  task,
+  today,
+  categoryName,
+  onToggleDone,
+  onDelete,
+  onEdit,
+}: TaskRowProps) {
   const due = formatDueMeta(task.due_date, task.done, today)
   const barColor = task.done ? DONE_BAR_COLOR : PRIORITY_BAR_COLOR[task.priority]
 
@@ -49,19 +57,23 @@ function TaskRow({ task, today, categoryName, onToggleDone, onDelete }: TaskRowP
         style={{ background: barColor }}
       />
 
-      <div className="min-w-0 flex-1">
-        <p
-          className={`m-0 text-[15px] break-words ${task.done ? 'text-muted line-through' : ''}`}
+      <button
+        type="button"
+        onClick={() => onEdit(task.id)}
+        className={`flex min-h-11 min-w-0 flex-1 flex-col justify-center text-start ${FOCUS_RING}`}
+      >
+        <span
+          className={`text-[15px] break-words ${task.done ? 'text-muted line-through' : ''}`}
         >
           {task.title}
-        </p>
-        <p className="mt-0.5 text-[12.5px] text-muted">
+        </span>
+        <span className="mt-0.5 text-[12.5px] text-muted">
           {categoryName} ·{' '}
           <span className={due.isLate ? 'font-semibold text-[#B3374D]' : ''}>
             {due.text}
           </span>
-        </p>
-      </div>
+        </span>
+      </button>
 
       <button
         type="button"

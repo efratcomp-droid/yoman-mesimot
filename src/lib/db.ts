@@ -1,9 +1,14 @@
 const DB_NAME = 'yoman-mesimot'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
-export type StoreName = 'tasks' | 'categories' | 'tasks_queue'
+export type StoreName = 'tasks' | 'categories' | 'tasks_queue' | 'categories_queue'
 
-const STORE_NAMES: StoreName[] = ['tasks', 'categories', 'tasks_queue']
+const STORE_NAMES: StoreName[] = [
+  'tasks',
+  'categories',
+  'tasks_queue',
+  'categories_queue',
+]
 
 export interface KeyValueStore<T> {
   getAll(): Promise<T[]>
