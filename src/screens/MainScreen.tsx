@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useAuthStore } from '../store/authStore'
 import { useTasksStore } from '../store/tasks'
-import { supabase } from '../lib/supabase'
+import { useCategoriesStore } from '../store/categories'
 import { formatHeaderDate, toDateOnly } from '../lib/formatDate'
 import { FILTERS, filterTasks, sortTasks, type FilterKey } from '../lib/taskFilters'
-import type { Category } from '../types/database'
 import TaskRow from '../components/TaskRow'
 import QuickAddBar from '../components/QuickAddBar'
+import TaskEditPanel from '../components/TaskEditPanel'
 
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plum'
@@ -18,18 +17,25 @@ const EMPTY_MESSAGE: Record<FilterKey, string> = {
   done: 'עוד לא הושלמה אף משימה.',
 }
 
-function MainScreen() {
-  const session = useAuthStore((state) => state.session)
+interface MainScreenProps {
+  onOpenSettings: () => void
+}
+
+function MainScreen({ onOpenSettings }: MainScreenProps) {
   const tasks = useTasksStore((state) => state.tasks)
   const syncStatus = useTasksStore((state) => state.syncStatus)
   const load = useTasksStore((state) => state.load)
   const addTask = useTasksStore((state) => state.addTask)
+  const updateTask = useTasksStore((state) => state.updateTask)
   const markDone = useTasksStore((state) => state.markDone)
   const softDeleteTask = useTasksStore((state) => state.softDeleteTask)
   const subscribeRealtime = useTasksStore((state) => state.subscribeRealtime)
 
+  const categories = useCategoriesStore((state) => state.categories)
+  const loadCategories = useCategoriesStore((state) => state.load)
+
   const [filter, setFilter] = useState<FilterKey>('today')
-  const [categories, setCategories] = useState<Category[]>([])
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
   const today = toDateOnly(new Date())
 
   useEffect(() => {
@@ -39,24 +45,8 @@ function MainScreen() {
   }, [load, subscribeRealtime])
 
   useEffect(() => {
-    const userId = session?.user.id
-    if (!userId) {
-      return
-    }
-    let cancelled = false
-    void supabase
-      .from('categories')
-      .select('*')
-      .eq('user_id', userId)
-      .then(({ data }) => {
-        if (!cancelled && data) {
-          setCategories(data)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [session?.user.id])
+    void loadCategories()
+  }, [loadCategories])
 
   const categoryNameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -71,6 +61,7 @@ function MainScreen() {
   const doneCount = filterTasks(tasks, 'done', today).length
 
   const visibleTasks = sortTasks(filterTasks(tasks, filter, today), today)
+  const editingTask = tasks.find((task) => task.id === editingTaskId) ?? null
 
   return (
     <div className="min-h-screen bg-cream">
@@ -88,6 +79,7 @@ function MainScreen() {
           <button
             type="button"
             aria-label="הגדרות"
+            onClick={onOpenSettings}
             className={`flex h-11 w-11 flex-none items-center justify-center rounded-full bg-lilac text-[17px] text-plum ${FOCUS_RING}`}
           >
             ⚙
@@ -144,12 +136,23 @@ function MainScreen() {
               categoryName={categoryNameById.get(task.category_id ?? '') ?? 'ללא קטגוריה'}
               onToggleDone={markDone}
               onDelete={softDeleteTask}
+              onEdit={setEditingTaskId}
             />
           ))
         )}
       </div>
 
       <QuickAddBar categories={categories} syncStatus={syncStatus} onAdd={addTask} />
+
+      {editingTask && (
+        <TaskEditPanel
+          task={editingTask}
+          categories={categories}
+          onUpdate={updateTask}
+          onDelete={softDeleteTask}
+          onClose={() => setEditingTaskId(null)}
+        />
+      )}
     </div>
   )
 }
