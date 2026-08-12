@@ -6,6 +6,18 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
+    <meta name="theme-color" content="#4A2C52" />
+    <meta name="description" content="יומן משימות אישי מסונכרן" />
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- iOS standalone: full screen, no Safari chrome -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="משימות" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -13,9 +25,57 @@
       rel="stylesheet"
     />
     <title>יומן משימות</title>
+
+    <style>
+      /* Painted before any JS runs, so a cold open never flashes white.
+         Replaced wholesale when React mounts into #root. */
+      body {
+        margin: 0;
+        background: #fbf7f3;
+      }
+      .app-splash {
+        display: flex;
+        min-height: 100vh;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: #fbf7f3;
+      }
+      .app-splash__mark {
+        width: 64px;
+        height: 64px;
+      }
+      .app-splash__bar {
+        width: 34px;
+        height: 2px;
+        border-radius: 2px;
+        background: #c15f86;
+        animation: app-splash-pulse 1.1s ease-in-out infinite;
+      }
+      @keyframes app-splash-pulse {
+        0%,
+        100% {
+          opacity: 0.35;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .app-splash__bar {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="app-splash">
+        <img class="app-splash__mark" src="/favicon.svg" alt="" />
+        <div class="app-splash__bar"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
