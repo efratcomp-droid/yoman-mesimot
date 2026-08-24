@@ -8,6 +8,8 @@ import MainScreen from './MainScreen'
 interface MockTasksState {
   tasks: Task[]
   syncStatus: SyncStatus
+  error: string | null
+  clearError: Mock<() => void>
   load: Mock<() => void>
   addTask: Mock<() => void>
   updateTask: Mock<(id: string, changes: Partial<Task>) => void>
@@ -25,6 +27,8 @@ const { tasksState, categoriesState, unsubscribeMock } = vi.hoisted(() => ({
   tasksState: {
     tasks: [] as Task[],
     syncStatus: 'synced' as SyncStatus,
+    error: null as string | null,
+    clearError: vi.fn<() => void>(),
     load: vi.fn<() => void>(),
     addTask: vi.fn<() => void>(),
     updateTask: vi.fn<(id: string, changes: Partial<Task>) => void>(),
@@ -72,6 +76,8 @@ describe('MainScreen', () => {
   beforeEach(() => {
     tasksState.tasks = []
     tasksState.syncStatus = 'synced'
+    tasksState.error = null
+    tasksState.clearError.mockClear()
     tasksState.load.mockClear()
     tasksState.markDone.mockClear()
     tasksState.softDeleteTask.mockClear()
@@ -97,6 +103,37 @@ describe('MainScreen', () => {
     tasksState.syncStatus = 'offline'
     render(<MainScreen onOpenSettings={onOpenSettings} />)
     expect(await screen.findByText('אין חיבור')).toBeInTheDocument()
+  })
+
+  // A failed write used to leave no trace on screen at all: the store held an
+  // error, nothing rendered it, and the indicator still read "מסונכרן".
+  it('shows a failed write to the user instead of swallowing it', async () => {
+    tasksState.error = 'לשרת אין הרשאה לקבל את השינוי.'
+    tasksState.syncStatus = 'error'
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('לשרת אין הרשאה לקבל את השינוי.')
+    expect(screen.getByText('השמירה נכשלה')).toBeInTheDocument()
+    expect(screen.queryByText('מסונכרן')).not.toBeInTheDocument()
+  })
+
+  it('dismisses the failure message when the user closes it', async () => {
+    tasksState.error = 'השמירה בשרת נכשלה. נסי שוב.'
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    await screen.findByRole('alert')
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'סגירת ההודעה' }))
+
+    expect(tasksState.clearError).toHaveBeenCalled()
+  })
+
+  it('shows no alert while everything is synced', async () => {
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    await screen.findByText('אין משימות לתאריך של היום.')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('shows the CLAUDE.md empty-state message for the default "today" tab', async () => {

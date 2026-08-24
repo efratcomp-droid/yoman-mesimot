@@ -41,6 +41,23 @@ create index if not exists idx_tasks_due_date on tasks (due_date);
 create index if not exists idx_tasks_done on tasks (done);
 
 -- ============================================================
+-- הרשאות טבלה — RLS לבדו אינו מספיק
+-- ============================================================
+-- Postgres בודק קודם אם לתפקיד יש הרשאה על הטבלה, ורק אחר כך מפעיל את ה-RLS
+-- כדי לסנן שורות. בלי ה-grant הזה כל בקשה מהדפדפן נדחית ב-403
+-- (permission denied for table) עוד לפני שה-policy נבדק — הטבלה נשארת ריקה
+-- גם כשה-policies מוגדרים נכון לחלוטין.
+--
+-- anon אינו מקבל דבר: אין הרשמה פתוחה, והאפליקציה ניגשת לנתונים רק אחרי
+-- התחברות, כלומר תמיד בתפקיד authenticated.
+
+revoke all on table tasks from anon;
+revoke all on table categories from anon;
+
+grant select, insert, update, delete on table tasks to authenticated;
+grant select, insert, update, delete on table categories to authenticated;
+
+-- ============================================================
 -- Row Level Security — policy נפרד לכל פעולה, על בסיס user_id = auth.uid()
 -- ============================================================
 

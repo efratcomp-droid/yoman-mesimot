@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { getAll, createIndexedDbStore, putRecord, putAll, removeRecord } from '../lib/db'
-import { ActionQueue, QueueNetworkError, type QueueItem } from '../lib/queue'
+import { ActionQueue, QueueRetryError, type QueueItem } from '../lib/queue'
+import { SyncRejectionError, toQueueError, toUserMessage } from '../lib/syncErrors'
 import { resolveConflict } from '../lib/conflict'
 import { useAuthStore } from './authStore'
 import type { Task, Priority } from '../types/database'
@@ -26,20 +27,41 @@ export type TaskOperation =
   | { type: 'insert'; task: Task }
   | { type: 'update'; id: string; changes: TaskChanges; previousTask: Task }
 
-const SYNC_ERROR_MESSAGE = 'השינוי לא נשמר בשרת. נסי שוב.'
+const LOCAL_SAVE_ERROR = 'לא הצלחנו לשמור את המשימה במכשיר. נסי שוב.'
+const LOAD_ERROR = 'לא הצלחנו לטעון את המשימות מהשרת. מוצג המידע השמור במכשיר.'
+const NOT_SIGNED_IN = 'יש להתחבר כדי להוסיף משימה.'
+const SESSION_LOST = 'ההתחברות פגה. התחברי מחדש כדי לשמור את השינויים.'
+const WRONG_OWNER = 'המשימה שייכת למשתמשת אחרת ולא נשלחה. התחברי מחדש.'
 
-function isNetworkError(error: unknown): boolean {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    return true
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The insert policy rejects any row whose user_id is not the caller's, and a
+ * row that never carried one is rejected before the policy is even reached.
+ * Checking it on the way out turns that into a Hebrew message instead of a
+ * row that quietly never arrives.
+ */
+function assertInsertableByCurrentUser(task: Task): void {
+  const sessionUserId = useAuthStore.getState().session?.user.id
+  if (!sessionUserId) {
+    // Retryable: the queue keeps the task until the session is back.
+    throw new QueueRetryError(SESSION_LOST)
   }
-  return error instanceof TypeError
+  if (!task.user_id || !UUID_PATTERN.test(task.user_id)) {
+    throw new SyncRejectionError(WRONG_OWNER)
+  }
+  if (task.user_id !== sessionUserId) {
+    throw new SyncRejectionError(WRONG_OWNER)
+  }
 }
 
 async function processTaskOperation(operation: TaskOperation): Promise<void> {
   try {
     if (operation.type === 'insert') {
+      assertInsertableByCurrentUser(operation.task)
       const { error } = await supabase.from('tasks').insert(operation.task)
-      if (error) throw error
+      // unique_violation: a previous attempt did land, so this one is done.
+      if (error && error.code !== '23505') throw error
       return
     }
 
@@ -49,10 +71,7 @@ async function processTaskOperation(operation: TaskOperation): Promise<void> {
       .eq('id', operation.id)
     if (error) throw error
   } catch (error) {
-    if (isNetworkError(error)) {
-      throw new QueueNetworkError()
-    }
-    throw error
+    throw toQueueError(error)
   }
 }
 
@@ -64,7 +83,7 @@ export interface AddTaskInput {
   dueDate?: string | null
 }
 
-export type SyncStatus = 'synced' | 'syncing' | 'offline'
+export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'error'
 
 interface TasksState {
   tasks: Task[]
@@ -81,9 +100,20 @@ interface TasksState {
 }
 
 export const useTasksStore = create<TasksState>((set, get) => {
+  /**
+   * Set while the queue is holding something it could not deliver. Dismissing
+   * the message must not make the indicator claim everything is synced, so the
+   * indicator reads this rather than the banner text.
+   */
+  let deliveryFailure: string | null = null
+
   async function updateSyncStatus() {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       set({ syncStatus: 'offline' })
+      return
+    }
+    if (deliveryFailure) {
+      set({ syncStatus: 'error' })
       return
     }
     const pending = await queue.pending()
@@ -94,11 +124,26 @@ export const useTasksStore = create<TasksState>((set, get) => {
     store: createIndexedDbStore<QueueItem<TaskOperation>>('tasks_queue'),
     processor: processTaskOperation,
     onChange: () => void updateSyncStatus(),
-    onError: (operation) => {
+
+    onDelivered: () => {
+      deliveryFailure = null
+    },
+
+    // Still queued: keep the task exactly as the user left it, and say why it
+    // has not arrived yet.
+    onRetryableError: (_operation, error) => {
+      deliveryFailure = toUserMessage(error)
+      set({ error: deliveryFailure })
+    },
+
+    // The server will never accept this one. Roll it back so the screen stops
+    // showing a task that does not exist, and say so.
+    onPermanentError: (operation, error) => {
+      const message = toUserMessage(error)
       if (operation.type === 'insert') {
         set((state) => ({
           tasks: state.tasks.filter((task) => task.id !== operation.task.id),
-          error: SYNC_ERROR_MESSAGE,
+          error: `${message} המשימה «${operation.task.title}» לא נשמרה.`,
         }))
         void removeRecord('tasks', operation.task.id)
       } else {
@@ -106,7 +151,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
           tasks: state.tasks.map((task) =>
             task.id === operation.id ? operation.previousTask : task,
           ),
-          error: SYNC_ERROR_MESSAGE,
+          error: message,
         }))
         void putRecord('tasks', operation.previousTask)
       }
@@ -130,7 +175,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
     set((state) => ({
       tasks: state.tasks.map((task) => (task.id === id ? updatedTask : task)),
     }))
-    void putRecord('tasks', updatedTask)
+
     void queue
       .enqueue({
         type: 'update',
@@ -138,7 +183,19 @@ export const useTasksStore = create<TasksState>((set, get) => {
         changes: { ...changes, updated_at: updatedAt },
         previousTask,
       })
-      .then(() => queue.drain())
+      .then(() => {
+        void putRecord('tasks', updatedTask).catch(() => {})
+        return queue.drain()
+      })
+      .catch(() => {
+        // The change never reached the durable queue — undo it rather than
+        // leaving a screen that disagrees with every other device.
+        set((state) => ({
+          tasks: state.tasks.map((task) => (task.id === id ? previousTask : task)),
+          error: LOCAL_SAVE_ERROR,
+          syncStatus: 'error',
+        }))
+      })
   }
 
   return {
@@ -152,8 +209,12 @@ export const useTasksStore = create<TasksState>((set, get) => {
 
     load: async () => {
       set({ status: 'loading' })
-      const cached = await getAll<Task>('tasks')
+      const cached = await getAll<Task>('tasks').catch((): Task[] => [])
       set({ tasks: cached, status: 'ready' })
+
+      // Anything left from a previous session gets another chance on open,
+      // rather than waiting for the next action or for the network to flap.
+      void queue.drain()
 
       const userId = useAuthStore.getState().session?.user.id
       if (!userId) {
@@ -165,6 +226,10 @@ export const useTasksStore = create<TasksState>((set, get) => {
         .select('*')
         .eq('user_id', userId)
       if (error || !data) {
+        // A rejected read is the same symptom as a rejected write and must not
+        // look like a healthy, quiet app.
+        deliveryFailure = error ? toUserMessage(error) : LOAD_ERROR
+        set({ error: LOAD_ERROR, syncStatus: 'error' })
         return
       }
 
@@ -187,14 +252,14 @@ export const useTasksStore = create<TasksState>((set, get) => {
       }
 
       set({ tasks: merged })
-      await putAll('tasks', merged)
+      await putAll('tasks', merged).catch(() => {})
       void updateSyncStatus()
     },
 
     addTask: async (input) => {
       const userId = useAuthStore.getState().session?.user.id
       if (!userId) {
-        set({ error: 'יש להתחבר כדי להוסיף משימה.' })
+        set({ error: NOT_SIGNED_IN })
         return
       }
 
@@ -215,8 +280,22 @@ export const useTasksStore = create<TasksState>((set, get) => {
       }
 
       set((state) => ({ tasks: [...state.tasks, task] }))
-      await putRecord('tasks', task)
-      await queue.enqueue({ type: 'insert', task })
+
+      // The queue is what makes the task durable, so it goes first. The
+      // IndexedDB copy under 'tasks' is only a render cache: if it fails the
+      // task is still on its way, and it must never block the send.
+      try {
+        await queue.enqueue({ type: 'insert', task })
+      } catch {
+        set((state) => ({
+          tasks: state.tasks.filter((existing) => existing.id !== task.id),
+          error: LOCAL_SAVE_ERROR,
+          syncStatus: 'error',
+        }))
+        return
+      }
+
+      void putRecord('tasks', task).catch(() => {})
       void queue.drain()
     },
 
@@ -283,6 +362,8 @@ export const useTasksStore = create<TasksState>((set, get) => {
       }
     },
 
+    // Dismisses the message only. If the queue is still stuck the indicator
+    // keeps saying so.
     clearError: () => set({ error: null }),
   }
 })

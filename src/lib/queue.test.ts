@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { KeyValueStore } from './db'
-import { ActionQueue, QueueNetworkError, type QueueItem } from './queue'
+import { ActionQueue, QueueRetryError, type QueueItem } from './queue'
 
 class MemoryStore<T extends { id: string }> implements KeyValueStore<T> {
   private items = new Map<string, T>()
@@ -35,10 +35,11 @@ describe('ActionQueue', () => {
     expect(await queue.pending()).toEqual([])
   })
 
-  it('keeps items queued and stops draining on a network error', async () => {
+  it('keeps items queued and stops draining on a retryable error', async () => {
     const store = new MemoryStore<QueueItem<string>>()
-    const processor = vi.fn().mockRejectedValue(new QueueNetworkError())
-    const queue = new ActionQueue<string>({ store, processor })
+    const processor = vi.fn().mockRejectedValue(new QueueRetryError())
+    const onRetryableError = vi.fn()
+    const queue = new ActionQueue<string>({ store, processor, onRetryableError })
 
     await queue.enqueue('op-1')
     await queue.enqueue('op-2')
@@ -48,21 +49,54 @@ describe('ActionQueue', () => {
     expect(await queue.pending()).toEqual(['op-1', 'op-2'])
   })
 
-  it('drops an item and reports the error on a non-network failure, then continues', async () => {
+  it('reports a retryable failure so it can never pass unnoticed', async () => {
+    const store = new MemoryStore<QueueItem<string>>()
+    const failure = new QueueRetryError('אין חיבור לרשת.')
+    const processor = vi.fn().mockRejectedValue(failure)
+    const onRetryableError = vi.fn()
+    const onPermanentError = vi.fn()
+    const queue = new ActionQueue<string>({
+      store,
+      processor,
+      onRetryableError,
+      onPermanentError,
+    })
+
+    await queue.enqueue('op-1')
+    await queue.drain()
+
+    expect(onRetryableError).toHaveBeenCalledWith('op-1', failure)
+    expect(onPermanentError).not.toHaveBeenCalled()
+    expect(await queue.pending()).toEqual(['op-1'])
+  })
+
+  it('reports delivery so a caller can tell a stuck queue from a healthy one', async () => {
+    const store = new MemoryStore<QueueItem<string>>()
+    const processor = vi.fn().mockResolvedValue(undefined)
+    const onDelivered = vi.fn()
+    const queue = new ActionQueue<string>({ store, processor, onDelivered })
+
+    await queue.enqueue('op-1')
+    await queue.drain()
+
+    expect(onDelivered).toHaveBeenCalledWith('op-1')
+  })
+
+  it('drops an item and reports the error on a permanent failure, then continues', async () => {
     const store = new MemoryStore<QueueItem<string>>()
     const failure = new Error('validation failed')
     const processor = vi
       .fn()
       .mockRejectedValueOnce(failure)
       .mockResolvedValueOnce(undefined)
-    const onError = vi.fn()
-    const queue = new ActionQueue<string>({ store, processor, onError })
+    const onPermanentError = vi.fn()
+    const queue = new ActionQueue<string>({ store, processor, onPermanentError })
 
     await queue.enqueue('op-1')
     await queue.enqueue('op-2')
     await queue.drain()
 
-    expect(onError).toHaveBeenCalledWith('op-1', failure)
+    expect(onPermanentError).toHaveBeenCalledWith('op-1', failure)
     expect(processor).toHaveBeenCalledTimes(2)
     expect(await queue.pending()).toEqual([])
   })
@@ -110,9 +144,9 @@ describe('ActionQueue', () => {
     expect(onChange).toHaveBeenCalledTimes(4)
   })
 
-  it('does not call onChange when a network error stops draining', async () => {
+  it('reports onChange when a retryable error stops draining, so the indicator updates', async () => {
     const store = new MemoryStore<QueueItem<string>>()
-    const processor = vi.fn().mockRejectedValue(new QueueNetworkError())
+    const processor = vi.fn().mockRejectedValue(new QueueRetryError())
     const onChange = vi.fn()
     const queue = new ActionQueue<string>({ store, processor, onChange })
 
@@ -120,6 +154,6 @@ describe('ActionQueue', () => {
     onChange.mockClear()
     await queue.drain()
 
-    expect(onChange).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenCalledTimes(1)
   })
 })

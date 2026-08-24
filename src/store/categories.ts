@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { supabase } from '../lib/supabase'
 import { getAll, createIndexedDbStore, putRecord, putAll, removeRecord } from '../lib/db'
-import { ActionQueue, QueueNetworkError, type QueueItem } from '../lib/queue'
+import { ActionQueue, QueueRetryError, type QueueItem } from '../lib/queue'
+import { SyncRejectionError, toQueueError, toUserMessage } from '../lib/syncErrors'
 import { useAuthStore } from './authStore'
 import type { Category } from '../types/database'
 
@@ -12,20 +13,32 @@ export type CategoryOperation =
   | { type: 'update'; id: string; changes: CategoryChanges; previousCategory: Category }
   | { type: 'delete'; id: string; previousCategory: Category }
 
-const SYNC_ERROR_MESSAGE = 'השינוי לא נשמר בשרת. נסי שוב.'
+const LOCAL_SAVE_ERROR = 'לא הצלחנו לשמור את הקטגוריה במכשיר. נסי שוב.'
+const LOAD_ERROR = 'לא הצלחנו לטעון את הקטגוריות מהשרת. מוצג המידע השמור במכשיר.'
+const NOT_SIGNED_IN = 'יש להתחבר כדי להוסיף קטגוריה.'
+const SESSION_LOST = 'ההתחברות פגה. התחברי מחדש כדי לשמור את השינויים.'
+const WRONG_OWNER = 'הקטגוריה שייכת למשתמשת אחרת ולא נשלחה. התחברי מחדש.'
 
-function isNetworkError(error: unknown): boolean {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    return true
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Same reason as in the tasks store: a row without a valid owner can only be
+ * rejected by RLS, so it is caught here where it can still be explained. */
+function assertInsertableByCurrentUser(userId: string): void {
+  const sessionUserId = useAuthStore.getState().session?.user.id
+  if (!sessionUserId) {
+    throw new QueueRetryError(SESSION_LOST)
   }
-  return error instanceof TypeError
+  if (!userId || !UUID_PATTERN.test(userId) || userId !== sessionUserId) {
+    throw new SyncRejectionError(WRONG_OWNER)
+  }
 }
 
 async function processCategoryOperation(operation: CategoryOperation): Promise<void> {
   try {
     if (operation.type === 'insert') {
+      assertInsertableByCurrentUser(operation.category.user_id)
       const { error } = await supabase.from('categories').insert(operation.category)
-      if (error) throw error
+      if (error && error.code !== '23505') throw error
       return
     }
     if (operation.type === 'update') {
@@ -39,10 +52,7 @@ async function processCategoryOperation(operation: CategoryOperation): Promise<v
     const { error } = await supabase.from('categories').delete().eq('id', operation.id)
     if (error) throw error
   } catch (error) {
-    if (isNetworkError(error)) {
-      throw new QueueNetworkError()
-    }
-    throw error
+    throw toQueueError(error)
   }
 }
 
@@ -64,13 +74,18 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
   const queue = new ActionQueue<CategoryOperation>({
     store: createIndexedDbStore<QueueItem<CategoryOperation>>('categories_queue'),
     processor: processCategoryOperation,
-    onError: (operation) => {
+
+    // Still queued — keep the change and explain the delay.
+    onRetryableError: (_operation, error) => set({ error: toUserMessage(error) }),
+
+    onPermanentError: (operation, error) => {
+      const message = toUserMessage(error)
       if (operation.type === 'insert') {
         set((state) => ({
           categories: state.categories.filter(
             (category) => category.id !== operation.category.id,
           ),
-          error: SYNC_ERROR_MESSAGE,
+          error: message,
         }))
         void removeRecord('categories', operation.category.id)
       } else {
@@ -84,7 +99,7 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
                   : category,
               )
             : [...state.categories, operation.previousCategory],
-          error: SYNC_ERROR_MESSAGE,
+          error: message,
         }))
         void putRecord('categories', operation.previousCategory)
       }
@@ -103,10 +118,20 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
         category.id === id ? updatedCategory : category,
       ),
     }))
-    void putRecord('categories', updatedCategory)
     void queue
       .enqueue({ type: 'update', id, changes, previousCategory })
-      .then(() => queue.drain())
+      .then(() => {
+        void putRecord('categories', updatedCategory).catch(() => {})
+        return queue.drain()
+      })
+      .catch(() => {
+        set((state) => ({
+          categories: state.categories.map((category) =>
+            category.id === id ? previousCategory : category,
+          ),
+          error: LOCAL_SAVE_ERROR,
+        }))
+      })
   }
 
   return {
@@ -116,8 +141,9 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
 
     load: async () => {
       set({ status: 'loading' })
-      const cached = await getAll<Category>('categories')
+      const cached = await getAll<Category>('categories').catch((): Category[] => [])
       set({ categories: cached, status: 'ready' })
+      void queue.drain()
 
       const userId = useAuthStore.getState().session?.user.id
       if (!userId) {
@@ -130,6 +156,7 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
         .eq('user_id', userId)
         .order('position', { ascending: true })
       if (error || !data) {
+        set({ error: LOAD_ERROR })
         return
       }
 
@@ -148,13 +175,13 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
       }
 
       set({ categories: merged })
-      await putAll('categories', merged)
+      await putAll('categories', merged).catch(() => {})
     },
 
     addCategory: async (name) => {
       const userId = useAuthStore.getState().session?.user.id
       if (!userId) {
-        set({ error: 'יש להתחבר כדי להוסיף קטגוריה.' })
+        set({ error: NOT_SIGNED_IN })
         return
       }
 
@@ -173,8 +200,19 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
       }
 
       set((state) => ({ categories: [...state.categories, category] }))
-      await putRecord('categories', category)
-      await queue.enqueue({ type: 'insert', category })
+
+      // Durability first, render cache second — see the tasks store.
+      try {
+        await queue.enqueue({ type: 'insert', category })
+      } catch {
+        set((state) => ({
+          categories: state.categories.filter((existing) => existing.id !== category.id),
+          error: LOCAL_SAVE_ERROR,
+        }))
+        return
+      }
+
+      void putRecord('categories', category).catch(() => {})
       void queue.drain()
     },
 
@@ -199,8 +237,18 @@ export const useCategoriesStore = create<CategoriesState>((set, get) => {
       set((state) => ({
         categories: state.categories.filter((category) => category.id !== id),
       }))
-      await removeRecord('categories', id)
-      await queue.enqueue({ type: 'delete', id, previousCategory })
+
+      try {
+        await queue.enqueue({ type: 'delete', id, previousCategory })
+      } catch {
+        set((state) => ({
+          categories: [...state.categories, previousCategory],
+          error: LOCAL_SAVE_ERROR,
+        }))
+        return
+      }
+
+      void removeRecord('categories', id).catch(() => {})
       void queue.drain()
     },
 

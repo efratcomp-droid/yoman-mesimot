@@ -10,6 +10,8 @@ interface MockAuthState {
 
 interface MockCategoriesState {
   categories: Category[]
+  error: string | null
+  clearError: Mock<() => void>
   load: Mock<() => void>
   addCategory: Mock<(name: string) => void>
   renameCategory: Mock<(id: string, name: string) => void>
@@ -23,6 +25,8 @@ const { authState, categoriesState } = vi.hoisted(() => ({
   } satisfies MockAuthState,
   categoriesState: {
     categories: [] as Category[],
+    error: null as string | null,
+    clearError: vi.fn<() => void>(),
     load: vi.fn<() => void>(),
     addCategory: vi.fn<(name: string) => void>(),
     renameCategory: vi.fn<(id: string, name: string) => void>(),
@@ -56,6 +60,8 @@ const onBack = vi.fn()
 describe('SettingsScreen', () => {
   beforeEach(() => {
     categoriesState.categories = []
+    categoriesState.error = null
+    categoriesState.clearError.mockClear()
     categoriesState.load.mockClear()
     categoriesState.addCategory.mockClear()
     categoriesState.deleteCategory.mockClear()
@@ -119,5 +125,17 @@ describe('SettingsScreen', () => {
   it('shows the app version', () => {
     render(<SettingsScreen onBack={onBack} />)
     expect(screen.getByText(/^גרסה /)).toBeInTheDocument()
+  })
+
+  it('shows a category write failure instead of swallowing it', async () => {
+    categoriesState.error = 'השמירה בשרת נכשלה. נסי שוב.'
+    render(<SettingsScreen onBack={onBack} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('השמירה בשרת נכשלה. נסי שוב.')
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'סגירת ההודעה' }))
+    expect(categoriesState.clearError).toHaveBeenCalled()
   })
 })
