@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useAuthStore } from '../store/authStore'
 import { useCategoriesStore } from '../store/categories'
 import type { Category } from '../types/database'
+import ErrorBanner from '../components/ErrorBanner'
 import packageJson from '../../package.json'
 
 const FOCUS_RING =
@@ -87,6 +88,8 @@ function SettingsScreen({ onBack }: SettingsScreenProps) {
   const renameCategory = useCategoriesStore((state) => state.renameCategory)
   const recolorCategory = useCategoriesStore((state) => state.recolorCategory)
   const deleteCategory = useCategoriesStore((state) => state.deleteCategory)
+  const error = useCategoriesStore((state) => state.error)
+  const clearError = useCategoriesStore((state) => state.clearError)
 
   const [newCategoryName, setNewCategoryName] = useState('')
 
@@ -130,6 +133,8 @@ function SettingsScreen({ onBack }: SettingsScreenProps) {
             הגדרות
           </h1>
         </div>
+
+        <ErrorBanner message={error} onDismiss={clearError} />
 
         <section className="mb-8">
           <h2 className="mb-3 text-sm font-medium text-muted">קטגוריות</h2>

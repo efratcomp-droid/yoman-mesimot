@@ -24,6 +24,8 @@ interface MainScreenProps {
 function MainScreen({ onOpenSettings }: MainScreenProps) {
   const tasks = useTasksStore((state) => state.tasks)
   const syncStatus = useTasksStore((state) => state.syncStatus)
+  const error = useTasksStore((state) => state.error)
+  const clearError = useTasksStore((state) => state.clearError)
   const load = useTasksStore((state) => state.load)
   const addTask = useTasksStore((state) => state.addTask)
   const updateTask = useTasksStore((state) => state.updateTask)
@@ -142,7 +144,13 @@ function MainScreen({ onOpenSettings }: MainScreenProps) {
         )}
       </div>
 
-      <QuickAddBar categories={categories} syncStatus={syncStatus} onAdd={addTask} />
+      <QuickAddBar
+        categories={categories}
+        syncStatus={syncStatus}
+        error={error}
+        onDismissError={clearError}
+        onAdd={addTask}
+      />
 
       {editingTask && (
         <TaskEditPanel

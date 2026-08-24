@@ -16,9 +16,29 @@ export interface KeyValueStore<T> {
   remove(id: string): Promise<void>
 }
 
-function openDb(): Promise<IDBDatabase> {
+/**
+ * An open request that never settles would leave every caller awaiting
+ * forever — a write that is neither delivered nor reported. Both ways that can
+ * happen (another tab holding an older version open, and an engine that never
+ * answers at all) are turned into a rejection instead.
+ */
+const OPEN_TIMEOUT_MS = 10_000
+
+/** One connection for the whole app: reopening per call leaks handles, and a
+ * leaked handle is exactly what blocks the next version upgrade. */
+let connection: Promise<IDBDatabase> | null = null
+
+function requestConnection(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB is unavailable in this browser context'))
+      return
+    }
+
     const request = indexedDB.open(DB_NAME, DB_VERSION)
+    const timeout = setTimeout(() => {
+      reject(new Error(`IndexedDB did not open within ${OPEN_TIMEOUT_MS}ms`))
+    }, OPEN_TIMEOUT_MS)
 
     request.onupgradeneeded = () => {
       const db = request.result
@@ -29,9 +49,45 @@ function openDb(): Promise<IDBDatabase> {
       }
     }
 
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
+    request.onblocked = () => {
+      clearTimeout(timeout)
+      reject(new Error('IndexedDB upgrade is blocked by another open tab'))
+    }
+
+    request.onsuccess = () => {
+      clearTimeout(timeout)
+      const db = request.result
+      // Another tab needs to upgrade: let go so it is not blocked in turn.
+      db.onversionchange = () => {
+        db.close()
+        connection = null
+      }
+      resolve(db)
+    }
+
+    request.onerror = () => {
+      clearTimeout(timeout)
+      reject(request.error ?? new Error('IndexedDB failed to open'))
+    }
   })
+}
+
+function openDb(): Promise<IDBDatabase> {
+  if (!connection) {
+    connection = requestConnection().catch((error: unknown) => {
+      // Do not cache the failure — the next call gets a fresh attempt.
+      connection = null
+      throw error
+    })
+  }
+  return connection
+}
+
+/** Releases the cached connection. Used when a test needs a clean database. */
+export async function closeDb(): Promise<void> {
+  const pending = connection
+  connection = null
+  await pending?.then((db) => db.close()).catch(() => {})
 }
 
 function waitForTransaction(tx: IDBTransaction): Promise<void> {

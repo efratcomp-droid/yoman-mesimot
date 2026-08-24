@@ -6,11 +6,18 @@ export interface QueueItem<T> {
   operation: T
 }
 
-/** Thrown by a processor to signal a transient connectivity failure — the item stays queued for retry. */
-export class QueueNetworkError extends Error {
-  constructor(message = 'network unreachable') {
-    super(message)
-    this.name = 'QueueNetworkError'
+/**
+ * Thrown by a processor to signal a failure the server may still accept later —
+ * no connection, an expired token, a missing grant. The item stays queued and
+ * draining stops so later items keep their place.
+ */
+export class QueueRetryError extends Error {
+  readonly userMessage: string
+
+  constructor(userMessage = 'השינוי ממתין לשליחה.') {
+    super(userMessage)
+    this.name = 'QueueRetryError'
+    this.userMessage = userMessage
   }
 }
 
@@ -20,20 +27,29 @@ type ErrorHandler<T> = (operation: T, error: unknown) => void
 export class ActionQueue<T> {
   private readonly store: KeyValueStore<QueueItem<T>>
   private readonly processor: Processor<T>
-  private readonly onError?: ErrorHandler<T>
+  private readonly onPermanentError?: ErrorHandler<T>
+  private readonly onRetryableError?: ErrorHandler<T>
+  private readonly onDelivered?: (operation: T) => void
   private readonly onChange?: () => void
   private draining = false
 
   constructor(options: {
     store: KeyValueStore<QueueItem<T>>
     processor: Processor<T>
-    onError?: ErrorHandler<T>
+    /** The server rejected the operation for good — the caller should roll it back. */
+    onPermanentError?: ErrorHandler<T>
+    /** Delivery failed but the operation is still queued; report it, do not roll back. */
+    onRetryableError?: ErrorHandler<T>
+    /** The operation reached the server. */
+    onDelivered?: (operation: T) => void
     /** Called whenever the queue's pending count may have changed (enqueued, delivered, or dropped). */
     onChange?: () => void
   }) {
     this.store = options.store
     this.processor = options.processor
-    this.onError = options.onError
+    this.onPermanentError = options.onPermanentError
+    this.onRetryableError = options.onRetryableError
+    this.onDelivered = options.onDelivered
     this.onChange = options.onChange
 
     if (typeof window !== 'undefined') {
@@ -53,10 +69,12 @@ export class ActionQueue<T> {
   }
 
   /**
-   * Processes queued items in order. Stops immediately on a network error so
-   * later items keep their place and everything retries together once back
-   * online. A non-network failure is permanent for that item: it is dropped
-   * and reported via onError, and draining continues with the rest.
+   * Processes queued items in order. Stops on a retryable failure so later
+   * items keep their place and everything is tried again together; the item
+   * stays queued and the failure is reported through onRetryableError. A
+   * permanent rejection drops that one item, reports it through
+   * onPermanentError so the caller can roll the change back, and draining
+   * continues with the rest.
    */
   async drain(): Promise<void> {
     if (this.draining) {
@@ -75,13 +93,16 @@ export class ActionQueue<T> {
         try {
           await this.processor(item.operation)
           await this.store.remove(item.id)
+          this.onDelivered?.(item.operation)
           this.onChange?.()
         } catch (error) {
-          if (error instanceof QueueNetworkError) {
+          if (error instanceof QueueRetryError) {
+            this.onRetryableError?.(item.operation, error)
+            this.onChange?.()
             return
           }
           await this.store.remove(item.id)
-          this.onError?.(item.operation, error)
+          this.onPermanentError?.(item.operation, error)
           this.onChange?.()
         }
       }

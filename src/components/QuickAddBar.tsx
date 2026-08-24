@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import type { AddTaskInput } from '../store/tasks'
 import type { Category, Priority } from '../types/database'
 import type { SyncStatus } from '../store/tasks'
+import ErrorBanner from './ErrorBanner'
 
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plum'
@@ -10,6 +11,16 @@ const SYNC_LABEL: Record<SyncStatus, string> = {
   synced: 'מסונכרן',
   syncing: 'מסנכרן…',
   offline: 'אין חיבור',
+  error: 'השמירה נכשלה',
+}
+
+// The indicator sits on every screen, so it is the one thing that must never
+// claim everything is fine while a change is stuck.
+const SYNC_COLOR: Record<SyncStatus, string> = {
+  synced: 'text-muted',
+  syncing: 'text-muted',
+  offline: 'text-muted',
+  error: 'text-rose font-medium',
 }
 
 const PRIORITY_LABEL: Record<Priority, string> = {
@@ -21,10 +32,18 @@ const PRIORITY_LABEL: Record<Priority, string> = {
 interface QuickAddBarProps {
   categories: Category[]
   syncStatus: SyncStatus
+  error: string | null
+  onDismissError: () => void
   onAdd: (input: AddTaskInput) => void
 }
 
-function QuickAddBar({ categories, syncStatus, onAdd }: QuickAddBarProps) {
+function QuickAddBar({
+  categories,
+  syncStatus,
+  error,
+  onDismissError,
+  onAdd,
+}: QuickAddBarProps) {
   const [title, setTitle] = useState('')
   const [showMore, setShowMore] = useState(false)
   const [categoryId, setCategoryId] = useState('')
@@ -55,7 +74,9 @@ function QuickAddBar({ categories, syncStatus, onAdd }: QuickAddBarProps) {
   return (
     <div className="fixed inset-x-0 bottom-0 border-t border-line bg-[rgba(251,247,243,0.94)] px-4 pt-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] backdrop-blur-[8px]">
       <div className="mx-auto max-w-[560px]">
-        <p className="pb-3.5 text-center text-[12.5px] text-muted">
+        <ErrorBanner message={error} onDismiss={onDismissError} />
+
+        <p className={`pb-3.5 text-center text-[12.5px] ${SYNC_COLOR[syncStatus]}`}>
           {SYNC_LABEL[syncStatus]}
         </p>
 
