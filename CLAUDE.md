@@ -132,8 +132,10 @@ create table categories (
 
 `.github/workflows/keep-supabase-awake.yml` רץ פעם ביום (cron ב-05:17 UTC) ושולח פנייה אחת קלה ל-REST API עם `VITE_SUPABASE_URL` ו-`VITE_SUPABASE_ANON_KEY` מ-GitHub Secrets. הפנייה קוראת בלבד ולא כותבת דבר, ו-`workflow_dispatch` מאפשר הרצה ידנית. כשל בפנייה מפיל את ה-workflow, כך שמגיעה התראה במייל כשמשהו נשבר.
 
-- **הפנייה היא ל-`/rest/v1/` ולא לטבלה.** הסכימה עושה `revoke all` ל-`anon` על `tasks` ועל `categories` (ראי `supabase/schema.sql`), ולכן קריאה מטבלה עם המפתח הציבורי הייתה מוחזרת כשגיאת הרשאה ומפילה את ה-workflow בכל יום. שורש ה-REST מחזיר 200 לכל מפתח תקין בלי שום הרשאת טבלה, ומה שמאפס את מונה חוסר הפעילות הוא הפנייה עצמה.
+- **הפנייה היא ל-`/auth/v1/health`, לא ל-REST.** אין שום נקודת REST שהמפתח הציבורי יכול לגעת בה: הסכימה עושה `revoke all` ל-`anon` על `tasks` ועל `categories` (ראי `supabase/schema.sql`), ולכן קריאה מטבלה מוחזרת כ-`42501 permission denied`; ושורש PostgREST (`/rest/v1/`) חסום ב-Supabase לכל מפתח שאינו `service_role` ומחזיר `401 UNAUTHORIZED_INVALID_API_KEY_TYPE`. `/auth/v1/health` מחזיר 200 עם המפתח הציבורי ו-401 בלעדיו, כלומר זו פנייה מאומתת ולא בדיקה אנונימית, ומה שמאפס את מונה חוסר הפעילות הוא הפנייה עצמה.
+- הפנייה הזו מגיעה ל-GoTrue ולא מריצה שאילתת SQL. אם הפרויקט בכל זאת יושהה שוב למרות ש-workflow ירוק, השדרוג הוא פונקציית SQL זעירה (`keep_alive()` שמחזירה `now()`) עם `grant execute` ל-`anon`, שנקראת ב-`POST /rest/v1/rpc/keep_alive` — אבל זה שינוי סכימה ולכן לא נעשה מראש.
 - ה-workflow בודק גם שהגוף שחזר הוא JSON תקין, ולא רק שהסטטוס 200 — כדי ששער שמחזיר דף שגיאה לא ייחשב הצלחה.
+- ה-workflow מקצץ רווחים מה-secrets לפני השימוש: שורה חדשה שנדבקה לסוף מפתח הופכת את הכותרת ללא תקינה ומחזירה 401 שנראה כמו מפתח שגוי.
 - `service_role` לא מופיע ב-workflow ולא נשמר כ-secret.
 - GitHub משבית workflows מתוזמנים במאגר שאין בו פעילות במשך 60 יום. אם הפרויקט שוקט תקופה ארוכה, כדאי לוודא שה-workflow עדיין פעיל.
 
