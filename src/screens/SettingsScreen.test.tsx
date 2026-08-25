@@ -122,9 +122,13 @@ describe('SettingsScreen', () => {
     expect(onBack).toHaveBeenCalledTimes(2)
   })
 
-  it('shows the app version', () => {
+  it('shows the build version, so the running build can be identified', () => {
     render(<SettingsScreen onBack={onBack} />)
-    expect(screen.getByText(/^גרסה /)).toBeInTheDocument()
+
+    // package.json's version alone never changes between deploys; the build
+    // id appended to it is the part that answers "which build is this?".
+    expect(screen.getByText(__APP_VERSION__)).toBeInTheDocument()
+    expect(screen.getByText(/גרסה/)).toBeInTheDocument()
   })
 
   it('shows a category write failure instead of swallowing it', async () => {

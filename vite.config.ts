@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
-import { copyFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { copyFileSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -14,6 +15,33 @@ const SUPABASE_URL_PATTERN = /^https:\/\/[a-z0-9-]+\.supabase\.(co|in)\//i
 
 /** GitHub Pages serves this repo from a project subpath, not the domain root. */
 const BASE = '/yoman-mesimot/'
+
+/**
+ * A visible build identity, so it is possible to tell from the device itself
+ * which build is running. package.json's version alone cannot answer that —
+ * it stays 0.1.0 across every deploy — so the commit is appended to it.
+ */
+function resolveBuildVersion(): string {
+  const { version } = JSON.parse(
+    readFileSync(resolve(__dirname, 'package.json'), 'utf8'),
+  ) as { version: string }
+
+  const sha = process.env.GITHUB_SHA ?? readGitSha()
+  return sha ? `${version}+${sha.slice(0, 7)}` : version
+}
+
+function readGitSha(): string | null {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: __dirname,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    // A tarball checkout with no git metadata still has to build.
+    return null
+  }
+}
 
 /**
  * GitHub Pages has no server-side rewrite, so a deep link (or a hard refresh on
@@ -35,10 +63,18 @@ function spaFallback(): Plugin {
 
 export default defineConfig({
   base: BASE,
+  define: {
+    __APP_VERSION__: JSON.stringify(resolveBuildVersion()),
+  },
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // The generated registerSW.js only registers once, on `load`. An iOS
+      // home-screen app is resumed rather than reloaded, so that snippet can
+      // go days without ever asking whether a new worker exists. src/lib/
+      // serviceWorker.ts registers by hand and re-checks on every foreground.
+      injectRegister: null,
       // The icons live in public/ and are already covered by globPatterns
       // below, so listing them in includeAssets would only duplicate entries.
       manifest: {
@@ -64,18 +100,44 @@ export default defineConfig({
       },
       workbox: {
         // Precached so the shell opens instantly and works with no network.
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
-        globIgnores: ['404.html'],
+        // HTML is deliberately absent: see the navigation route below.
+        globPatterns: ['**/*.{js,css,svg,png,ico,woff,woff2}'],
         cleanupOutdatedCaches: true,
+        // Both are what make an update land without a reinstall: the new
+        // worker activates instead of waiting for every tab to close, and it
+        // takes over the open page immediately. Set explicitly rather than
+        // relying on what registerType: 'autoUpdate' happens to imply.
         clientsClaim: true,
-        // Must carry the base path: the SW is scoped to the project subpath.
-        navigateFallback: `${BASE}index.html`,
-        navigateFallbackDenylist: [SUPABASE_URL_PATTERN],
+        skipWaiting: true,
+        // Explicitly off. The plugin otherwise defaults it to index.html,
+        // which registers a NavigationRoute bound to the *precached* copy —
+        // cache-first, and exactly how an old index.html gets pinned forever.
+        // With index.html out of the precache that handler would also throw
+        // at startup and take the whole worker down with it. Navigations go
+        // through the NetworkFirst route below instead.
+        navigateFallback: undefined,
         runtimeCaching: [
           {
             // Explicit NetworkOnly so no future default can start caching data.
             urlPattern: SUPABASE_URL_PATTERN,
             handler: 'NetworkOnly',
+          },
+          {
+            // index.html names the hashed asset files, so a stale copy of it
+            // pins a stale app. It must never be answered from cache before
+            // the network has been asked. The cache is the offline fallback
+            // only, which keeps the installed app working with no signal.
+            urlPattern: ({ request }: { request: Request }) =>
+              request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'app-shell',
+              // Falls back to the last good shell rather than hanging on a
+              // network that accepts the connection and then stalls.
+              networkTimeoutSeconds: 4,
+              expiration: { maxEntries: 8 },
+              cacheableResponse: { statuses: [200] },
+            },
           },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
