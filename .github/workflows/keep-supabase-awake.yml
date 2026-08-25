@@ -1,0 +1,68 @@
+name: שמירה על פרויקט Supabase פעיל
+
+# בתוכנית החינמית פרויקט שלא מקבל פניות במשך כשבוע מושהה אוטומטית,
+# והאפליקציה מפסיקה לעבוד עד להפעלה ידנית. פנייה יומית אחת מאפסת את
+# מונה חוסר הפעילות.
+on:
+  schedule:
+    # 05:17 UTC — לא בראש השעה, שם התור של GitHub עמוס והרצות נדחות.
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+# העבודה כולה היא קריאת HTTP אחת החוצה: אין checkout ואין צורך בהרשאות.
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ודאי שה-secrets מוגדרים
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=""
+          [ -z "$VITE_SUPABASE_URL" ] && missing="$missing VITE_SUPABASE_URL"
+          [ -z "$VITE_SUPABASE_ANON_KEY" ] && missing="$missing VITE_SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::חסרים secrets:$missing — יש להוסיף אותם ב-Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+      - name: פנייה למסד הנתונים
+        env:
+          # שני אלה ציבוריים מעצם הגדרתם. המפתח נשלח בכותרת בלבד ולא
+          # בכתובת, כדי שלא ידלוף ללוג דרך שורת ה-curl.
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          status=$(curl \
+            --silent \
+            --show-error \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --output response.json \
+            --write-out '%{http_code}' \
+            --header "apikey: $SUPABASE_ANON_KEY" \
+            --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            "${SUPABASE_URL%/}/rest/v1/")
+
+          if [ "$status" != "200" ]; then
+            echo "::error::הפנייה ל-Supabase נכשלה עם סטטוס $status"
+            head -c 500 response.json
+            exit 1
+          fi
+
+          # פרויקט מושהה, או שער שמחזיר דף שגיאה, עלול להחזיר 200 עם גוף
+          # שאינו JSON. בדיקת הגוף היא ההבדל בין ping אמיתי לבין ירוק מדומה.
+          if ! jq -e . response.json > /dev/null 2>&1; then
+            echo "::error::Supabase החזיר 200 אך הגוף אינו JSON תקין"
+            head -c 500 response.json
+            exit 1
+          fi
+
+          echo "הפרויקט מגיב. מונה חוסר הפעילות אופס."
