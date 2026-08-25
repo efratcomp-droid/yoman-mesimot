@@ -3,6 +3,15 @@ name: שמירה על פרויקט Supabase פעיל
 # בתוכנית החינמית פרויקט שלא מקבל פניות במשך כשבוע מושהה אוטומטית,
 # והאפליקציה מפסיקה לעבוד עד להפעלה ידנית. פנייה יומית אחת מאפסת את
 # מונה חוסר הפעילות.
+#
+# הפנייה היא ל-/auth/v1/health ולא ל-/rest/v1/. השורש של PostgREST חסום
+# ב-Supabase לכל מפתח שאינו service_role ומחזיר
+#   401 {"message":"Invalid API key",
+#        "hint":"Only the `service_role` API key can be used for this endpoint."}
+#   sb-error-code: UNAUTHORIZED_INVALID_API_KEY_TYPE
+# וקריאה מטבלה חסומה גם היא, כי הסכימה עושה revoke all ל-anon (42501).
+# /auth/v1/health מחזיר 200 עם המפתח הציבורי, ו-401 בלעדיו — כלומר זו
+# פנייה מאומתת ולא בדיקה אנונימית.
 on:
   schedule:
     # 05:17 UTC — לא בראש השעה, שם התור של GitHub עמוס והרצות נדחות.
@@ -29,7 +38,7 @@ jobs:
             exit 1
           fi
 
-      - name: פנייה למסד הנתונים
+      - name: פנייה לפרויקט
         env:
           # שני אלה ציבוריים מעצם הגדרתם. המפתח נשלח בכותרת בלבד ולא
           # בכתובת, כדי שלא ידלוף ללוג דרך שורת ה-curl.
@@ -37,6 +46,11 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           set -euo pipefail
+
+          # רווח או שורה חדשה שנדבקו לסוף ה-secret הופכים את הכותרת
+          # ללא תקינה ומחזירים 401 שנראה כמו מפתח שגוי.
+          URL=$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]')
+          KEY=$(printf '%s' "$SUPABASE_ANON_KEY" | tr -d '[:space:]')
 
           status=$(curl \
             --silent \
@@ -47,9 +61,8 @@ jobs:
             --retry-all-errors \
             --output response.json \
             --write-out '%{http_code}' \
-            --header "apikey: $SUPABASE_ANON_KEY" \
-            --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            "${SUPABASE_URL%/}/rest/v1/")
+            --header "apikey: $KEY" \
+            "${URL%/}/auth/v1/health")
 
           if [ "$status" != "200" ]; then
             echo "::error::הפנייה ל-Supabase נכשלה עם סטטוס $status"
@@ -59,8 +72,8 @@ jobs:
 
           # פרויקט מושהה, או שער שמחזיר דף שגיאה, עלול להחזיר 200 עם גוף
           # שאינו JSON. בדיקת הגוף היא ההבדל בין ping אמיתי לבין ירוק מדומה.
-          if ! jq -e . response.json > /dev/null 2>&1; then
-            echo "::error::Supabase החזיר 200 אך הגוף אינו JSON תקין"
+          if ! jq -e 'type == "object"' response.json > /dev/null 2>&1; then
+            echo "::error::Supabase החזיר 200 אך הגוף אינו אובייקט JSON"
             head -c 500 response.json
             exit 1
           fi
