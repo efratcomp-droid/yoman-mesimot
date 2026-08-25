@@ -3,7 +3,6 @@ import { useAuthStore } from '../store/authStore'
 import { useCategoriesStore } from '../store/categories'
 import type { Category } from '../types/database'
 import ErrorBanner from '../components/ErrorBanner'
-import packageJson from '../../package.json'
 
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plum'
@@ -179,7 +178,11 @@ function SettingsScreen({ onBack }: SettingsScreenProps) {
           </button>
         </section>
 
-        <p className="text-center text-[12.5px] text-muted">גרסה {packageJson.version}</p>
+        {/* The build id is latin text and digits: isolated so RTL does not
+            reorder it around the Hebrew label. */}
+        <p className="text-center text-[12.5px] text-muted">
+          גרסה <span dir="ltr">{__APP_VERSION__}</span>
+        </p>
       </div>
     </div>
   )
