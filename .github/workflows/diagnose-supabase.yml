@@ -1,0 +1,65 @@
+name: אבחון זמני — Supabase 401
+
+# קובץ זמני. נמחק אחרי שהסיבה ל-401 מאותרת.
+on:
+  push:
+    branches: [claude/google-calendar-task-link-srilbp]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: אבחון
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -uo pipefail
+
+          # צורת הערכים, בלי לחשוף אותם: רווח או שורה חדשה נסתרים בסוף
+          # secret הם סיבה קלאסית ל-401.
+          trimmed_key=$(printf '%s' "$SUPABASE_ANON_KEY" | tr -d '[:space:]')
+          trimmed_url=$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]')
+          echo "key: len=${#SUPABASE_ANON_KEY} trimmed_len=${#trimmed_key} prefix=${SUPABASE_ANON_KEY:0:3}"
+          echo "url: len=${#SUPABASE_URL} trimmed_len=${#trimmed_url}"
+          case "$SUPABASE_URL" in
+            https://*) echo "url scheme: https ok" ;;
+            *)         echo "url scheme: NOT https" ;;
+          esac
+          case "$SUPABASE_URL" in
+            */) echo "url ends with slash: yes" ;;
+            *)  echo "url ends with slash: no" ;;
+          esac
+
+          BASE="${trimmed_url%/}"
+          K="$trimmed_key"
+
+          probe() {
+            local label="$1"; shift
+            local path="$1"; shift
+            local code
+            code=$(curl -s --max-time 25 -o /tmp/body.txt -w '%{http_code}' "$@" "$BASE$path")
+            printf '%-52s %s  %s\n' "$label" "$code" "$(head -c 150 /tmp/body.txt | tr -d '\n')"
+          }
+
+          echo
+          echo "=== probes ==="
+          probe "/rest/v1/            apikey+bearer" "/rest/v1/" \
+            -H "apikey: $K" -H "Authorization: Bearer $K"
+          probe "/rest/v1/            apikey only"   "/rest/v1/" -H "apikey: $K"
+          probe "/rest/v1/            bearer only"   "/rest/v1/" -H "Authorization: Bearer $K"
+          probe "/rest/v1/            no key"        "/rest/v1/"
+          probe "/rest/v1/tasks       apikey+bearer" "/rest/v1/tasks?select=id&limit=1" \
+            -H "apikey: $K" -H "Authorization: Bearer $K"
+          probe "/auth/v1/health      apikey"        "/auth/v1/health" -H "apikey: $K"
+          probe "/auth/v1/health      no key"        "/auth/v1/health"
+          probe "/auth/v1/settings    apikey"        "/auth/v1/settings" -H "apikey: $K"
+
+          echo
+          echo "=== raw headers for /rest/v1/ ==="
+          curl -s -D - -o /dev/null --max-time 25 \
+            -H "apikey: $K" -H "Authorization: Bearer $K" "$BASE/rest/v1/" | head -20
+          echo "אבחון הסתיים"
