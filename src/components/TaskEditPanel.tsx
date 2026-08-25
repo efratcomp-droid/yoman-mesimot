@@ -4,6 +4,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import { buildGoogleCalendarUrl } from '../lib/calendarLink'
 import type { Category, Priority, Task } from '../types/database'
 
 const FOCUS_RING =
@@ -30,6 +31,25 @@ interface TaskEditPanelProps {
 }
 
 const CLOSE_DRAG_THRESHOLD = 80
+
+function CalendarIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="5" width="18" height="16" rx="3" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+    </svg>
+  )
+}
 
 function TaskEditPanel({
   task,
@@ -138,6 +158,19 @@ function TaskEditPanel({
     setDragY(0)
   }
 
+  const categoryName =
+    categories.find((category) => category.id === task.category_id)?.name ?? null
+
+  const calendarUrl = task.due_date
+    ? buildGoogleCalendarUrl({
+        title: title.trim() || task.title,
+        dueDate: task.due_date,
+        notes,
+        categoryName,
+        priority: task.priority,
+      })
+    : null
+
   return (
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -241,6 +274,35 @@ function TaskEditPanel({
               className={FIELD_CLASS}
             />
           </label>
+
+          <div className="border-t border-line pt-4">
+            {calendarUrl ? (
+              <a
+                href={calendarUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-[11px] border border-line bg-lilac font-medium text-plum ${FOCUS_RING}`}
+              >
+                <CalendarIcon />
+                הוספה ליומן
+              </a>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled
+                  aria-describedby="calendar-hint"
+                  className="flex min-h-11 w-full cursor-not-allowed items-center justify-center gap-2 rounded-[11px] border border-line bg-lilac font-medium text-muted opacity-60"
+                >
+                  <CalendarIcon />
+                  הוספה ליומן
+                </button>
+                <p id="calendar-hint" className="mt-2 text-center text-sm text-muted">
+                  כדי להוסיף ליומן צריך קודם לקבוע תאריך יעד.
+                </p>
+              </>
+            )}
+          </div>
 
           <div className="border-t border-line pt-4">
             {!confirmingDelete ? (

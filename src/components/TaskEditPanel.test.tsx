@@ -120,6 +120,38 @@ describe('TaskEditPanel', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('disables the calendar button when the task has no due date', () => {
+    renderPanel()
+
+    const button = screen.getByRole('button', { name: /הוספה ליומן/ })
+    expect(button).toBeDisabled()
+    expect(
+      screen.getByText('כדי להוסיף ליומן צריך קודם לקבוע תאריך יעד.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /הוספה ליומן/ })).not.toBeInTheDocument()
+  })
+
+  it('links to Google Calendar when the task has a due date', () => {
+    renderPanel(
+      makeTask({
+        title: 'להעביר דוח',
+        notes: 'כולל נספחים',
+        category_id: 'cat-1',
+        priority: 1,
+        due_date: '2026-08-31',
+      }),
+    )
+
+    const link = screen.getByRole('link', { name: /הוספה ליומן/ })
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+
+    const params = new URL(link.getAttribute('href')!).searchParams
+    expect(params.get('text')).toBe('להעביר דוח')
+    expect(params.get('dates')).toBe('20260831/20260901')
+    expect(params.get('details')).toBe('כולל נספחים\nקטגוריה: כספים\nעדיפות: דחוף')
+  })
+
   it('updates priority immediately on change', async () => {
     renderPanel()
     const user = userEvent.setup()
