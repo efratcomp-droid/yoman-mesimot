@@ -1,5 +1,7 @@
+import { buildGoogleCalendarUrl } from '../lib/calendarLink'
 import { formatDueMeta } from '../lib/formatDate'
 import type { Task } from '../types/database'
+import CalendarIcon from './CalendarIcon'
 
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plum'
@@ -30,6 +32,21 @@ function TaskRow({
 }: TaskRowProps) {
   const due = formatDueMeta(task.due_date, task.done, today)
   const barColor = task.done ? DONE_BAR_COLOR : PRIORITY_BAR_COLOR[task.priority]
+
+  // Hidden rather than disabled on a done or undated task: the row is a
+  // two-second glance, and a dead control on it costs more than it gives.
+  const calendarUrl =
+    task.due_date && !task.done
+      ? buildGoogleCalendarUrl({
+          title: task.title,
+          dueDate: task.due_date,
+          notes: task.notes,
+          // Matches the edit panel, which sends no category line at all
+          // rather than the "ללא קטגוריה" placeholder shown in the row.
+          categoryName: task.category_id ? categoryName : null,
+          priority: task.priority,
+        })
+      : null
 
   return (
     <div
@@ -74,6 +91,22 @@ function TaskRow({
           </span>
         </span>
       </button>
+
+      {calendarUrl && (
+        <a
+          href={calendarUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="הוספה ליומן"
+          // The row's own controls sit beside this link rather than wrapping
+          // it, but stopping here keeps the link inert to any future
+          // click handler placed on the row itself.
+          onClick={(event) => event.stopPropagation()}
+          className={`flex min-h-11 min-w-11 flex-none items-center justify-center text-muted hover:text-plum ${FOCUS_RING}`}
+        >
+          <CalendarIcon size={17} />
+        </a>
+      )}
 
       <button
         type="button"

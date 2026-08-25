@@ -5,6 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { buildGoogleCalendarUrl } from '../lib/calendarLink'
+import CalendarIcon from './CalendarIcon'
 import type { Category, Priority, Task } from '../types/database'
 
 const FOCUS_RING =
@@ -31,25 +32,6 @@ interface TaskEditPanelProps {
 }
 
 const CLOSE_DRAG_THRESHOLD = 80
-
-function CalendarIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="5" width="18" height="16" rx="3" />
-      <path d="M3 10h18M8 3v4M16 3v4" />
-    </svg>
-  )
-}
 
 function TaskEditPanel({
   task,
