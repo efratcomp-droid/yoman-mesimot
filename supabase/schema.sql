@@ -151,3 +151,26 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row
   execute function create_default_categories();
+
+-- ============================================================
+-- Realtime — הוספת tasks ל-publication
+-- ============================================================
+-- Realtime לא שולח דבר על טבלה שאינה ב-publication. בלי השורה הזו המנוי
+-- בצד הלקוח מתחבר בהצלחה ולא מקבל אף אירוע, ובפרט לא את ה-UPDATE שנושא
+-- מחיקה רכה — כך שמחיקה במכשיר אחד לא מגיעה לשני.
+--
+-- מחיקה רכה היא UPDATE ולא DELETE, ולכן די ב-replica identity הרגיל:
+-- ה-handler קורא את payload.new, שמכיל תמיד את כל העמודות.
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'tasks'
+  ) then
+    alter publication supabase_realtime add table public.tasks;
+  end if;
+end
+$$;

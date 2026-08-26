@@ -14,8 +14,7 @@ import { tableColumns } from '../test/schemaSql'
 const SESSION_USER_ID = '5e198eba-d9b6-4bf2-8c59-ad18244f10fd'
 const OTHER_USER_ID = 'a7c31f02-4d55-4b18-9e6a-2f8c1b0d4e77'
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HEBREW_PATTERN = /[֐-׿]/
 
 interface PostgrestFailure {
@@ -23,7 +22,7 @@ interface PostgrestFailure {
   message: string
 }
 
-const { server, auth } = vi.hoisted(() => ({
+const { server, auth, realtime } = vi.hoisted(() => ({
   server: {
     inserts: [] as Record<string, unknown>[],
     updates: [] as Record<string, unknown>[],
@@ -31,8 +30,14 @@ const { server, auth } = vi.hoisted(() => ({
     updateError: null as PostgrestFailure | null,
     selectError: null as PostgrestFailure | null,
     selectData: [] as unknown[],
+    selectFilters: [] as { column: string; value: unknown }[],
   },
   auth: { userId: null as string | null },
+  realtime: {
+    // Captured so a test can deliver an event exactly as Supabase would.
+    handler: null as ((payload: unknown) => void) | null,
+    filters: [] as Record<string, unknown>[],
+  },
 }))
 
 vi.mock('../lib/supabase', () => ({
@@ -48,15 +53,38 @@ vi.mock('../lib/supabase', () => ({
           return Promise.resolve({ error: server.updateError })
         },
       }),
-      select: () => ({
-        eq: () =>
+      select: () => {
+        // Mirrors PostgREST: .is('deleted_at', null) filters server-side, so a
+        // test that forgets it would see soft-deleted rows come back.
+        const result = (onlyLive: boolean) =>
           Promise.resolve({
-            data: server.selectError ? null : server.selectData,
+            data: server.selectError
+              ? null
+              : onlyLive
+                ? (server.selectData as Task[]).filter((row) => !row.deleted_at)
+                : server.selectData,
             error: server.selectError,
-          }),
-      }),
+          })
+        const eqResult = Object.assign(result(false), {
+          is: (column: string, value: unknown) => {
+            server.selectFilters.push({ column, value })
+            return result(column === 'deleted_at' && value === null)
+          },
+        })
+        return { eq: () => eqResult }
+      },
     }),
-    channel: () => ({ on: () => ({ subscribe: () => ({}) }) }),
+    channel: () => ({
+      on: (
+        _event: string,
+        filter: Record<string, unknown>,
+        handler: (payload: unknown) => void,
+      ) => {
+        realtime.filters.push(filter)
+        realtime.handler = handler
+        return { subscribe: () => ({}) }
+      },
+    }),
     removeChannel: () => {},
   },
 }))
@@ -99,6 +127,9 @@ beforeEach(async () => {
   server.updateError = null
   server.selectError = null
   server.selectData = []
+  server.selectFilters = []
+  realtime.handler = null
+  realtime.filters = []
   auth.userId = SESSION_USER_ID
   setOnline(true)
 })
@@ -298,5 +329,143 @@ describe('the sync indicator tells the truth', () => {
 
     expect(store.getState().error).toBeNull()
     expect(store.getState().syncStatus).toBe('error')
+  })
+})
+
+/**
+ * A soft delete is an UPDATE that sets deleted_at, never a DELETE. Every one
+ * of the three paths a deletion can travel has to end with the task gone:
+ * deleted here, deleted on another device, or already deleted before this
+ * device even opened.
+ */
+describe('deletion propagates on all three paths', () => {
+  const REMOTE_TASK: Task = {
+    id: 'c0ffee00-0000-4000-8000-000000000001',
+    user_id: SESSION_USER_ID,
+    title: 'משימה שנמחקה במכשיר אחר',
+    notes: '',
+    category_id: null,
+    priority: 2,
+    due_date: null,
+    done: false,
+    done_at: null,
+    created_at: '2026-08-01T00:00:00.000Z',
+    updated_at: '2026-08-01T00:00:00.000Z',
+    deleted_at: null,
+  }
+
+  it('local delete: marks the row deleted and sends deleted_at to the server', async () => {
+    const store = await freshStore()
+    await store.getState().addTask({ title: 'למחוק אותי' })
+    await vi.waitFor(() => expect(server.inserts).toHaveLength(1))
+    const id = store.getState().tasks[0].id
+
+    await store.getState().softDeleteTask(id)
+    await vi.waitFor(() => expect(server.updates).toHaveLength(1))
+
+    expect(server.updates[0].deleted_at).toEqual(expect.any(String))
+    // Kept in state so a permanent rejection can still roll it back, but no
+    // longer visible anywhere in the app.
+    const { filterTasks } = await import('../lib/taskFilters')
+    expect(filterTasks(store.getState().tasks, 'all', '2026-08-26')).toHaveLength(0)
+  })
+
+  it('realtime delete: an UPDATE carrying deleted_at removes the task', async () => {
+    const store = await freshStore()
+    store.setState({ tasks: [REMOTE_TASK] })
+    const { putRecord, getAll } = await import('../lib/db')
+    await putRecord('tasks', REMOTE_TASK)
+
+    store.getState().subscribeRealtime()
+    expect(realtime.handler).not.toBeNull()
+
+    realtime.handler!({
+      eventType: 'UPDATE',
+      new: {
+        ...REMOTE_TASK,
+        deleted_at: '2026-08-26T09:00:00.000Z',
+        updated_at: '2026-08-26T09:00:00.000Z',
+      },
+      old: { id: REMOTE_TASK.id },
+    })
+
+    expect(store.getState().tasks).toHaveLength(0)
+    // The cache must lose it too, or the next cold open shows it again.
+    await vi.waitFor(async () => expect(await getAll<Task>('tasks')).toHaveLength(0))
+  })
+
+  it('realtime delete: a stale event does not undo a newer local edit', async () => {
+    const store = await freshStore()
+    const locallyEdited: Task = {
+      ...REMOTE_TASK,
+      title: 'נערך כאן אחרי המחיקה',
+      updated_at: '2026-08-26T12:00:00.000Z',
+    }
+    store.setState({ tasks: [locallyEdited] })
+    store.getState().subscribeRealtime()
+
+    realtime.handler!({
+      eventType: 'UPDATE',
+      new: {
+        ...REMOTE_TASK,
+        deleted_at: '2026-08-26T09:00:00.000Z',
+        updated_at: '2026-08-26T09:00:00.000Z',
+      },
+      old: { id: REMOTE_TASK.id },
+    })
+
+    expect(store.getState().tasks).toHaveLength(1)
+    expect(store.getState().tasks[0].title).toBe('נערך כאן אחרי המחיקה')
+  })
+
+  it('realtime insert from another device still arrives', async () => {
+    const store = await freshStore()
+    store.getState().subscribeRealtime()
+
+    realtime.handler!({ eventType: 'INSERT', new: REMOTE_TASK, old: {} })
+
+    expect(store.getState().tasks).toEqual([REMOTE_TASK])
+  })
+
+  it('initial load: asks the server to exclude soft-deleted rows', async () => {
+    const store = await freshStore()
+    server.selectData = [
+      REMOTE_TASK,
+      {
+        ...REMOTE_TASK,
+        id: 'c0ffee00-0000-4000-8000-000000000002',
+        deleted_at: '2026-08-26T09:00:00.000Z',
+      },
+    ]
+
+    await store.getState().load()
+
+    expect(server.selectFilters).toContainEqual({ column: 'deleted_at', value: null })
+    expect(store.getState().tasks.map((task) => task.id)).toEqual([REMOTE_TASK.id])
+  })
+
+  it('initial load: drops a cached task the server no longer returns', async () => {
+    const { putRecord, getAll } = await import('../lib/db')
+    // The cached copy predates the delete, so it still looks alive here.
+    await putRecord('tasks', REMOTE_TASK)
+    const store = await freshStore()
+    server.selectData = []
+
+    await store.getState().load()
+
+    expect(store.getState().tasks).toHaveLength(0)
+    await vi.waitFor(async () => expect(await getAll<Task>('tasks')).toHaveLength(0))
+  })
+
+  it('initial load: keeps a task whose insert has not been delivered yet', async () => {
+    server.insertError = { code: 'PGRST301', message: 'JWT expired' }
+    const store = await freshStore()
+    await store.getState().addTask({ title: 'עוד לא נשלחה' })
+    await vi.waitFor(() => expect(server.inserts).toHaveLength(1))
+
+    server.selectData = []
+    await store.getState().load()
+
+    expect(store.getState().tasks.map((task) => task.title)).toEqual(['עוד לא נשלחה'])
   })
 })
