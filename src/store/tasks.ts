@@ -225,6 +225,9 @@ export const useTasksStore = create<TasksState>((set, get) => {
         .from('tasks')
         .select('*')
         .eq('user_id', userId)
+        // Without this every soft-deleted row is pulled back on every open,
+        // so a delete made on another device is undone by the next refresh.
+        .is('deleted_at', null)
       if (error || !data) {
         // A rejected read is the same symptom as a rejected write and must not
         // look like a healthy, quiet app.
@@ -253,6 +256,17 @@ export const useTasksStore = create<TasksState>((set, get) => {
 
       set({ tasks: merged })
       await putAll('tasks', merged).catch(() => {})
+
+      // putAll only writes. Anything the server no longer returns — deleted
+      // here or on another device — would otherwise sit in the cache forever
+      // and be shown again on the next cold open.
+      const mergedIds = new Set(merged.map((task) => task.id))
+      for (const localTask of cached) {
+        if (!mergedIds.has(localTask.id)) {
+          void removeRecord('tasks', localTask.id).catch(() => {})
+        }
+      }
+
       void updateSyncStatus()
     },
 
@@ -329,18 +343,27 @@ export const useTasksStore = create<TasksState>((set, get) => {
         }
 
         const incoming = payload.new
-        set((state) => {
-          const existing = state.tasks.find((task) => task.id === incoming.id)
-          const resolved = existing ? resolveConflict(existing, incoming) : incoming
-          const tasks = existing
-            ? state.tasks.map((task) => (task.id === incoming.id ? resolved : task))
-            : [...state.tasks, resolved]
-          return { tasks }
-        })
-        const stored = get().tasks.find((task) => task.id === incoming.id)
-        if (stored) {
-          void putRecord('tasks', stored)
+        const existing = get().tasks.find((task) => task.id === incoming.id)
+        const resolved = existing ? resolveConflict(existing, incoming) : incoming
+
+        // A soft delete reaches other devices as an UPDATE carrying
+        // deleted_at — Postgres never emits a DELETE for it. Dropping the row
+        // here is what makes the deletion propagate; leaving it in state kept
+        // the task on screen and its tombstone in the cache.
+        if (resolved.deleted_at) {
+          set((state) => ({
+            tasks: state.tasks.filter((task) => task.id !== incoming.id),
+          }))
+          void removeRecord('tasks', incoming.id).catch(() => {})
+          return
         }
+
+        set((state) => ({
+          tasks: existing
+            ? state.tasks.map((task) => (task.id === incoming.id ? resolved : task))
+            : [...state.tasks, resolved],
+        }))
+        void putRecord('tasks', resolved).catch(() => {})
       }
 
       const channel = supabase
