@@ -6,6 +6,14 @@ import { FILTERS, filterTasks, sortTasks, type FilterKey } from '../lib/taskFilt
 import TaskRow from '../components/TaskRow'
 import QuickAddBar from '../components/QuickAddBar'
 import TaskEditPanel from '../components/TaskEditPanel'
+import CategoryFilterBar from '../components/CategoryFilterBar'
+import {
+  ALL_CATEGORIES,
+  filterByCategory,
+  readStoredCategoryFilter,
+  resolveCategoryFilter,
+  writeStoredCategoryFilter,
+} from '../lib/categoryFilter'
 
 const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-plum'
@@ -16,6 +24,8 @@ const EMPTY_MESSAGE: Record<FilterKey, string> = {
   all: 'אין משימות פתוחות. הוסיפי משימה חדשה למטה.',
   done: 'עוד לא הושלמה אף משימה.',
 }
+
+const EMPTY_CATEGORY_MESSAGE = 'אין משימות בקטגוריה הזו.'
 
 interface MainScreenProps {
   onOpenSettings: () => void
@@ -34,9 +44,11 @@ function MainScreen({ onOpenSettings }: MainScreenProps) {
   const subscribeRealtime = useTasksStore((state) => state.subscribeRealtime)
 
   const categories = useCategoriesStore((state) => state.categories)
+  const categoriesStatus = useCategoriesStore((state) => state.status)
   const loadCategories = useCategoriesStore((state) => state.load)
 
   const [filter, setFilter] = useState<FilterKey>('today')
+  const [storedCategoryId, setStoredCategoryId] = useState(readStoredCategoryFilter)
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
   const today = toDateOnly(new Date())
 
@@ -50,6 +62,22 @@ function MainScreen({ onOpenSettings }: MainScreenProps) {
     void loadCategories()
   }, [loadCategories])
 
+  // Until the categories arrive the stored id cannot be checked, so it is
+  // resolved on every render and only cleared once the store has loaded.
+  const selectedCategoryId = resolveCategoryFilter(storedCategoryId, categories)
+
+  useEffect(() => {
+    if (categoriesStatus === 'ready' && selectedCategoryId !== storedCategoryId) {
+      setStoredCategoryId(ALL_CATEGORIES)
+      writeStoredCategoryFilter(ALL_CATEGORIES)
+    }
+  }, [categoriesStatus, selectedCategoryId, storedCategoryId])
+
+  const selectCategory = (categoryId: string) => {
+    setStoredCategoryId(categoryId)
+    writeStoredCategoryFilter(categoryId)
+  }
+
   const categoryNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const category of categories) {
@@ -62,7 +90,10 @@ function MainScreen({ onOpenSettings }: MainScreenProps) {
   const openCount = filterTasks(tasks, 'all', today).length
   const doneCount = filterTasks(tasks, 'done', today).length
 
-  const visibleTasks = sortTasks(filterTasks(tasks, filter, today), today)
+  const visibleTasks = sortTasks(
+    filterByCategory(filterTasks(tasks, filter, today), selectedCategoryId),
+    today,
+  )
   const editingTask = tasks.find((task) => task.id === editingTaskId) ?? null
 
   return (
@@ -127,8 +158,18 @@ function MainScreen({ onOpenSettings }: MainScreenProps) {
           ))}
         </div>
 
+        <CategoryFilterBar
+          categories={categories}
+          selectedCategoryId={selectedCategoryId}
+          onSelect={selectCategory}
+        />
+
         {visibleTasks.length === 0 ? (
-          <p className="py-6 text-center text-muted">{EMPTY_MESSAGE[filter]}</p>
+          <p className="py-6 text-center text-muted">
+            {selectedCategoryId === ALL_CATEGORIES
+              ? EMPTY_MESSAGE[filter]
+              : EMPTY_CATEGORY_MESSAGE}
+          </p>
         ) : (
           visibleTasks.map((task) => (
             <TaskRow

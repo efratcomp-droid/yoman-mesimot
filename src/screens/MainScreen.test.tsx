@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { Category, Task } from '../types/database'
@@ -20,6 +20,7 @@ interface MockTasksState {
 
 interface MockCategoriesState {
   categories: Category[]
+  status: 'idle' | 'loading' | 'ready'
   load: Mock<() => void>
 }
 
@@ -38,6 +39,7 @@ const { tasksState, categoriesState, unsubscribeMock } = vi.hoisted(() => ({
   } satisfies MockTasksState,
   categoriesState: {
     categories: [] as Category[],
+    status: 'ready' as 'idle' | 'loading' | 'ready',
     load: vi.fn<() => void>(),
   } satisfies MockCategoriesState,
   unsubscribeMock: vi.fn(),
@@ -51,6 +53,17 @@ vi.mock('../store/categories', () => ({
   useCategoriesStore: <T,>(selector: (state: MockCategoriesState) => T): T =>
     selector(categoriesState),
 }))
+
+function makeCategory(overrides: Partial<Category>): Category {
+  return {
+    id: overrides.id ?? 'cat',
+    user_id: 'user-1',
+    name: overrides.name ?? 'קטגוריה',
+    color: '#4A2C52',
+    position: 0,
+    ...overrides,
+  }
+}
 
 function makeTask(overrides: Partial<Task>): Task {
   return {
@@ -82,6 +95,8 @@ describe('MainScreen', () => {
     tasksState.markDone.mockClear()
     tasksState.softDeleteTask.mockClear()
     categoriesState.categories = []
+    categoriesState.status = 'ready'
+    localStorage.clear()
     onOpenSettings.mockClear()
     unsubscribeMock.mockClear()
     tasksState.subscribeRealtime.mockClear()
@@ -193,5 +208,139 @@ describe('MainScreen', () => {
 
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'עריכת משימה' })).not.toBeInTheDocument()
+  })
+  it('hides the category bar with fewer than two categories, and shows it with two', async () => {
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    await screen.findByText('אין משימות לתאריך של היום.')
+    expect(
+      screen.queryByRole('group', { name: 'סינון לפי קטגוריה' }),
+    ).not.toBeInTheDocument()
+
+    categoriesState.categories = [makeCategory({ id: 'cat-1', name: 'כספים' })]
+    const single = render(<MainScreen onOpenSettings={onOpenSettings} />)
+    expect(
+      screen.queryByRole('group', { name: 'סינון לפי קטגוריה' }),
+    ).not.toBeInTheDocument()
+    single.unmount()
+
+    categoriesState.categories = [
+      makeCategory({ id: 'cat-1', name: 'כספים', position: 1 }),
+      makeCategory({ id: 'cat-2', name: 'תפעול', position: 0 }),
+    ]
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    const bar = await screen.findByRole('group', { name: 'סינון לפי קטגוריה' })
+    expect(
+      within(bar)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['כל הקטגוריות', 'תפעול', 'כספים'])
+  })
+
+  it('combines the date filter with the category filter, and leaves the counters alone', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const nextMonth = '2099-01-01'
+    categoriesState.categories = [
+      makeCategory({ id: 'cat-1', name: 'כספים', position: 0 }),
+      makeCategory({ id: 'cat-2', name: 'תפעול', position: 1 }),
+    ]
+    tasksState.tasks = [
+      makeTask({ id: 'a', title: 'כספים היום', due_date: today, category_id: 'cat-1' }),
+      makeTask({ id: 'b', title: 'תפעול היום', due_date: today, category_id: 'cat-2' }),
+      makeTask({
+        id: 'c',
+        title: 'כספים מאוחר',
+        due_date: nextMonth,
+        category_id: 'cat-1',
+      }),
+    ]
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    await screen.findByText('כספים היום')
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'כספים' }))
+
+    expect(screen.getByText('כספים היום')).toBeInTheDocument()
+    expect(screen.queryByText('תפעול היום')).not.toBeInTheDocument()
+    expect(screen.queryByText('כספים מאוחר')).not.toBeInTheDocument()
+
+    // The counters keep counting everything: two tasks due today, three open.
+    expect(screen.getByText('להיום').previousElementSibling).toHaveTextContent('2')
+    expect(screen.getByText('פתוחות').previousElementSibling).toHaveTextContent('3')
+
+    await user.click(screen.getByRole('button', { name: 'הכול' }))
+    expect(screen.getByText('כספים מאוחר')).toBeInTheDocument()
+    expect(screen.queryByText('תפעול היום')).not.toBeInTheDocument()
+  })
+
+  it('shows the category empty state when the selected category has no tasks', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    categoriesState.categories = [
+      makeCategory({ id: 'cat-1', name: 'כספים', position: 0 }),
+      makeCategory({ id: 'cat-2', name: 'תפעול', position: 1 }),
+    ]
+    tasksState.tasks = [
+      makeTask({ id: 'a', title: 'כספים היום', due_date: today, category_id: 'cat-1' }),
+    ]
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    await screen.findByText('כספים היום')
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'תפעול' }))
+
+    expect(screen.getByText('אין משימות בקטגוריה הזו.')).toBeInTheDocument()
+  })
+
+  it('remembers the selected category across openings', async () => {
+    categoriesState.categories = [
+      makeCategory({ id: 'cat-1', name: 'כספים', position: 0 }),
+      makeCategory({ id: 'cat-2', name: 'תפעול', position: 1 }),
+    ]
+    const first = render(<MainScreen onOpenSettings={onOpenSettings} />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'תפעול' }))
+    expect(screen.getByRole('button', { name: 'תפעול' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    first.unmount()
+
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+    expect(await screen.findByRole('button', { name: 'תפעול' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: 'כל הקטגוריות' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+  })
+
+  it('falls back to all categories when the remembered one was deleted', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    categoriesState.categories = [
+      makeCategory({ id: 'cat-1', name: 'כספים', position: 0 }),
+      makeCategory({ id: 'cat-2', name: 'תפעול', position: 1 }),
+    ]
+    const first = render(<MainScreen onOpenSettings={onOpenSettings} />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'תפעול' }))
+    first.unmount()
+
+    // "תפעול" is gone by the next opening.
+    categoriesState.categories = [
+      makeCategory({ id: 'cat-1', name: 'כספים', position: 0 }),
+      makeCategory({ id: 'cat-3', name: 'אישי', position: 1 }),
+    ]
+    tasksState.tasks = [
+      makeTask({ id: 'a', title: 'כספים היום', due_date: today, category_id: 'cat-1' }),
+    ]
+    render(<MainScreen onOpenSettings={onOpenSettings} />)
+
+    expect(await screen.findByText('כספים היום')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'כל הקטגוריות' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(localStorage.getItem('yoman-mesimot:category-filter')).toBeNull()
   })
 })
