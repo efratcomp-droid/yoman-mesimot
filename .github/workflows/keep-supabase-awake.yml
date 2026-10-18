@@ -2,16 +2,16 @@ name: שמירה על פרויקט Supabase פעיל
 
 # בתוכנית החינמית פרויקט שלא מקבל פניות במשך כשבוע מושהה אוטומטית,
 # והאפליקציה מפסיקה לעבוד עד להפעלה ידנית. פנייה יומית אחת מאפסת את
-# מונה חוסר הפעילות.
+# מונה חוסר הפעילות — אבל רק אם היא מגיעה למסד הנתונים עצמו.
 #
-# הפנייה היא ל-/auth/v1/health ולא ל-/rest/v1/. השורש של PostgREST חסום
-# ב-Supabase לכל מפתח שאינו service_role ומחזיר
-#   401 {"message":"Invalid API key",
-#        "hint":"Only the `service_role` API key can be used for this endpoint."}
-#   sb-error-code: UNAUTHORIZED_INVALID_API_KEY_TYPE
-# וקריאה מטבלה חסומה גם היא, כי הסכימה עושה revoke all ל-anon (42501).
-# /auth/v1/health מחזיר 200 עם המפתח הציבורי, ו-401 בלעדיו — כלומר זו
-# פנייה מאומתת ולא בדיקה אנונימית.
+# הפנייה הייתה ל-/auth/v1/health, וזה לא הספיק: ההרצות היו ירוקות יום
+# אחרי יום והפרויקט הושהה בכל זאת, כי /auth/v1/health מגיע ל-GoTrue
+# ולא מריץ שאילתת SQL. לכן נוספה לסכימה הפונקציה keep_alive(), שנקראת
+# כאן דרך PostgREST ומריצה select now() בפוסטגרס.
+#
+# הפונקציה לא חושפת נתונים ולא כותבת דבר: אין לה פרמטרים, הגוף שלה הוא
+# select now(), היא stable (ולכן כתיבה אסורה בה), והיא security invoker —
+# כלומר רצה בהרשאות של anon, שממילא נשללו לו כל ההרשאות על הטבלאות.
 on:
   schedule:
     # 05:17 UTC — לא בראש השעה, שם התור של GitHub עמוס והרצות נדחות.
@@ -52,6 +52,8 @@ jobs:
           URL=$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]')
           KEY=$(printf '%s' "$SUPABASE_ANON_KEY" | tr -d '[:space:]')
 
+          # POST /rest/v1/rpc/keep_alive — נקודת REST אמיתית, בניגוד
+          # לשורש PostgREST שחסום לכל מפתח שאינו service_role.
           status=$(curl \
             --silent \
             --show-error \
@@ -61,8 +63,12 @@ jobs:
             --retry-all-errors \
             --output response.json \
             --write-out '%{http_code}' \
+            --request POST \
             --header "apikey: $KEY" \
-            "${URL%/}/auth/v1/health")
+            --header "Authorization: Bearer $KEY" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "${URL%/}/rest/v1/rpc/keep_alive")
 
           if [ "$status" != "200" ]; then
             echo "::error::הפנייה ל-Supabase נכשלה עם סטטוס $status"
@@ -70,12 +76,15 @@ jobs:
             exit 1
           fi
 
-          # פרויקט מושהה, או שער שמחזיר דף שגיאה, עלול להחזיר 200 עם גוף
-          # שאינו JSON. בדיקת הגוף היא ההבדל בין ping אמיתי לבין ירוק מדומה.
-          if ! jq -e 'type == "object"' response.json > /dev/null 2>&1; then
-            echo "::error::Supabase החזיר 200 אך הגוף אינו אובייקט JSON"
+          # keep_alive() מחזירה timestamptz, ולכן PostgREST מחזיר מחרוזת
+          # JSON אחת עם חותמת זמן. פרויקט מושהה או שער שמחזיר דף שגיאה
+          # עלולים להחזיר 200 עם גוף אחר לגמרי — בדיקת הגוף היא ההבדל
+          # בין ping אמיתי לבין ירוק מדומה.
+          if ! jq -e 'type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")' \
+            response.json > /dev/null 2>&1; then
+            echo "::error::Supabase החזיר 200 אך הגוף אינו חותמת זמן"
             head -c 500 response.json
             exit 1
           fi
 
-          echo "הפרויקט מגיב. מונה חוסר הפעילות אופס."
+          echo "הפרויקט מגיב, והשאילתה רצה בפוסטגרס. זמן השרת: $(jq -r '.' response.json)"
