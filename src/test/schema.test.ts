@@ -63,16 +63,19 @@ describe('supabase/schema.sql — row level security', () => {
     expect(schemaSql).toContain(`alter table ${table} enable row level security;`)
   })
 
-  it.each(['tasks', 'categories'])('has one owner policy per operation on %s', (table) => {
-    for (const operation of ['select', 'insert', 'update', 'delete']) {
-      expect(schemaSql).toContain(`create policy ${table}_${operation}_own on ${table}`)
-    }
-  })
+  it.each(['tasks', 'categories'])(
+    'has one owner policy per operation on %s',
+    (table) => {
+      for (const operation of ['select', 'insert', 'update', 'delete']) {
+        expect(schemaSql).toContain(`create policy ${table}_${operation}_own on ${table}`)
+      }
+    },
+  )
 
   it('scopes every policy to the caller, never to a wider condition', () => {
-    const conditions = [...schemaSql.matchAll(/(?:using|with check)\s*\(([^)]*\))?\)/g)].map(
-      (match) => match[0],
-    )
+    const conditions = [
+      ...schemaSql.matchAll(/(?:using|with check)\s*\(([^)]*\))?\)/g),
+    ].map((match) => match[0])
 
     expect(conditions.length).toBeGreaterThan(0)
     for (const condition of conditions) {
@@ -98,6 +101,47 @@ describe('supabase/schema.sql — columns match the TypeScript row types', () =>
       expect(schemaSql).toMatch(
         new RegExp(`user_id\\s+uuid not null references auth\\.users\\(id\\)`),
       )
+    }
+  })
+})
+
+describe('supabase/schema.sql — keep_alive()', () => {
+  // The daily ping has to run a real SQL query: /auth/v1/health never reached
+  // Postgres, so the inactivity counter kept running and the project was
+  // suspended with the workflow green.
+  const definition = schemaSql.match(
+    /create or replace function public\.keep_alive\(\)[\s\S]*?\$\$;/,
+  )?.[0]
+
+  it('is defined and returns a timestamp', () => {
+    expect(definition).toBeDefined()
+    expect(definition).toContain('returns timestamptz')
+  })
+
+  it('may be executed by anon, since the ping only holds the public key', () => {
+    expect(schemaSql).toContain(
+      'grant execute on function public.keep_alive() to anon, authenticated;',
+    )
+    expect(schemaSql).toContain('revoke all on function public.keep_alive() from public;')
+  })
+
+  // The three properties that keep it from becoming a way in: it runs with the
+  // caller's privileges, writing is rejected, and what it resolves is fixed.
+  it('runs as the caller, cannot write, and has a locked search_path', () => {
+    expect(definition).toContain('security invoker')
+    expect(definition).not.toContain('security definer')
+    expect(definition).toContain('stable')
+    expect(definition).toContain("set search_path = ''")
+  })
+
+  it('reads no table and writes nothing', () => {
+    const body = definition?.match(/as \$\$([\s\S]*?)\$\$;/)?.[1] ?? ''
+    expect(body.trim()).toBe('select now();')
+    for (const table of ['tasks', 'categories']) {
+      expect(body).not.toContain(table)
+    }
+    for (const statement of ['insert', 'update', 'delete', 'grant', 'alter']) {
+      expect(body).not.toContain(statement)
     }
   })
 })

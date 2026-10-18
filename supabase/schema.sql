@@ -174,3 +174,37 @@ begin
   end if;
 end
 $$;
+
+-- ============================================================
+-- keep_alive() — שמירה על הפרויקט פעיל
+-- ============================================================
+-- בתוכנית החינמית פרויקט שלא מקבל פניות במשך כשבוע מושהה אוטומטית.
+-- הפנייה היומית ל-/auth/v1/health הגיעה ל-GoTrue ולא הריצה שאילתת SQL,
+-- ולכן לא איפסה את מונה חוסר הפעילות — והפרויקט הושהה למרות workflow ירוק.
+-- הפונקציה הזו נותנת ל-ping נקודת REST אמיתית: קריאה אליה דרך PostgREST
+-- מריצה שאילתה בפוסטגרס עצמו.
+--
+-- היא לא חושפת נתונים ולא כותבת דבר:
+--   * אין פרמטרים ואין גישה לטבלאות — הגוף כולו הוא select now().
+--   * stable, ולכן אסורה בה כל כתיבה.
+--   * security invoker (ולא definer): היא רצה בהרשאות של הקורא, ול-anon
+--     נשללו כל ההרשאות על tasks ועל categories למעלה בקובץ הזה.
+--   * search_path ריק, כדי שלא ניתן להחליף את מה שהיא קוראת.
+
+create or replace function public.keep_alive()
+returns timestamptz
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select now();
+$$;
+
+comment on function public.keep_alive() is
+  'מחזירה now(). נקראת פעם ביום מ-.github/workflows/keep-supabase-awake.yml כדי שהפרויקט לא יושהה בגלל חוסר פעילות. לא חושפת נתונים ולא כותבת דבר.';
+
+-- הרשאת EXECUTE על פונקציה חדשה ניתנת ל-PUBLIC כברירת מחדל. השלילה
+-- וה-grant המפורש משאירים אותה בדיוק אצל מי שצריך אותה.
+revoke all on function public.keep_alive() from public;
+grant execute on function public.keep_alive() to anon, authenticated;
