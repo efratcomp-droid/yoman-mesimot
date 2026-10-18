@@ -146,6 +146,24 @@ describe('supabase/schema.sql — keep_alive()', () => {
   })
 })
 
+describe('supabase/schema.sql — trigger functions are not callable from the API', () => {
+  // Both are SECURITY DEFINER. Left with the default ACL, PUBLIC keeps EXECUTE
+  // and they can be invoked as RPC with the public key — which they were never
+  // meant to be. Postgres checks EXECUTE when the trigger is created, not when
+  // it fires, so the revoke does not disturb the trigger itself.
+  it('revokes execute on create_default_categories()', () => {
+    expect(schemaSql).toContain(
+      'revoke all on function create_default_categories() from public, anon, authenticated;',
+    )
+  })
+
+  it('revokes execute on the platform event-trigger function when it exists', () => {
+    expect(schemaSql).toContain(
+      'revoke all on function public.rls_auto_enable() from public, anon, authenticated;',
+    )
+  })
+})
+
 describe('supabase/schema.sql — no secrets', () => {
   it('never mentions the service role', () => {
     expect(schemaSql).not.toContain('service_role')

@@ -152,6 +152,28 @@ create trigger on_auth_user_created
   for each row
   execute function create_default_categories();
 
+-- פונקציית טריגר לא נועדה לקריאה מה-API. Postgres בודק EXECUTE בזמן
+-- יצירת הטריגר ולא בזמן ההפעלה, ולכן השלילה הזו לא פוגעת בטריגר עצמו —
+-- היא רק מונעת קריאה ל-POST /rest/v1/rpc/create_default_categories עם
+-- המפתח הציבורי. בלעדיה ההרשאה נשארת ב-PUBLIC כברירת מחדל, והפונקציה
+-- היא security definer, כלומר הייתה רצה בהרשאות הבעלים.
+revoke all on function create_default_categories() from public, anon, authenticated;
+
+-- rls_auto_enable() היא event trigger של פלטפורמת Supabase ולא נוצרת
+-- בקובץ הזה, אבל גם היא security definer עם ההרשאה הרחבה של ברירת המחדל.
+-- לכן השלילה רצה רק אם הפונקציה קיימת.
+do $$
+begin
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'rls_auto_enable'
+  ) then
+    revoke all on function public.rls_auto_enable() from public, anon, authenticated;
+  end if;
+end
+$$;
+
 -- ============================================================
 -- Realtime — הוספת tasks ל-publication
 -- ============================================================
